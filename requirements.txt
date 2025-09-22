@@ -33,5 +33,5 @@ telnyx==2.0.0
 langgraph==0.0.55
 langchain==0.2.5
 langchain-openai==0.1.8
-langchain-core==0.2.5
+langchain-core>=0.2.7,<0.3.0
 langsmith==0.1.85
