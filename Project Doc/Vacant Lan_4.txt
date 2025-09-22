@@ -1,0 +1,50 @@
+Vacant   Land   AI   Agent   Dialogue   Flow  
+Step   1:   First   Contact   (SMS/Email   opener)  
+“Hi   {FirstName},   this   is   Derek.   I’m   buying   vacant   land   in   {County}   and   noticed   you   own   a  
+parcel   near   {NearestTown}.   Would   you   consider   a   cash   offer   if   it   was   simple   and   hassle-free?  
+  (If   not   interested,   just   let   me   know.   Reply   STOP   to   opt   out.)”  
+ 
+Step   2:   If   they   say   Yes   /   Maybe   /   What’s   your   offer?  
+Agent:  
+  “Great!   To   put   something   together   that   makes   sense,   could   I   ask   a   few   quick   questions   about  
+the   property?   Won’t   take   long.”  
+ 
+Step   3:   Qualifying   Questions   (one   at   a   time,   short   messages)  
+1.   “Do   you   know   roughly   how   many   acres   or   lot   size   your   parcel   is?”  
+ 
+2.   “Does   it   have   road   access ,   or   is   it   landlocked?”  
+ 
+3.   “Any   idea   if   utilities   (water,   power,   septic/sewer)   are   nearby?”  
+ 
+4.   “Are   there   any   back   taxes,   liens,   or   HOA   fees   tied   to   the   land?”  
+ 
+5.   “If   we   agreed   on   a   fair   cash   price,   what’s   the   ballpark   amount   you’d   want?”  
+ 
+(AI   agent   pauses   after   each   question,   waits   for   response,   then   continues.   If   seller   is   unsure,  
+agent   can   say   “No   worries,   we   can   still   move   forward.”)  
+ 
+Step   4:   Transition   to   Appointment  
+If   answers   show   they’re   open   to   sell   →  
+
+“Perfect,   thanks   for   sharing   that.   The   next   step   is   super   simple:   we’ll   do   a   quick   15-minute   call  
+where   Derek   can   review   your   land   details   and   give   you   a   cash   range.   What’s   easier   for  
+you— afternoon   or   evening   this   week ?”  
+(AI   agent   either   offers   times   or   sends   Calendly   link   immediately.)  
+ 
+Step   5:   Booking   &   Confirmation  
+Once   they   pick   a   time   →  
+“Got   it!   I’ve   booked   you   for   {Date/Time}.   You’ll   get   a   confirmation   from   our   calendar.   If   anything  
+changes,   just   reply   here   and   we’ll   reschedule.   Looking   forward   to   it!”  
+ 
+Step   6:   If   they   say   Not   Interested  
+“No   problem   at   all,   I   appreciate   the   reply.   If   you   ever   reconsider   selling   your   land   in   the   future,  
+feel   free   to   reach   out.”  
+  (Mark   as   No-Interest,   remove   from   follow-up   sequence.)  
+ 
+✅   This   script   keeps   messages   short,   conversational,   and   progressive —so   the   AI   sounds  
+like   a   real   assistant   while   qualifying   the   lead   and   smoothly   pushing   toward   a   Calendly   booking.  
+ 
+Would   you   like   me   to   write   this   in   prompt   format   (exact   instructions   you   can   drop   into   your   AI  
+outreach   tool),   so   it   knows   how   to   ask   one   question   at   a   time   and   when   to   escalate   to   booking?  
+Is   this   conversation   helpful   so   far?  
+ 

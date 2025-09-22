@@ -1,0 +1,16 @@
+1)   Missed   Call   Follow-Up   (No   Show)  
+First   Follow-Up   (same   day   or   next   morning)  
+“Hi   {FirstName},   this   is   Derek’s   assistant.   I   noticed   we   missed   our   call   about   your   property   at  
+{Address}   yesterday.   Totally   understand   schedules   get   busy.   Would   you   like   to   reschedule   a  
+quick   15-minute   call?   Here’s   the   link   to   pick   a   time:   {Calendly}.”  
+ 
+Second   Follow-Up   (2–3   days   later)  
+“Just   checking   in,   {FirstName}.   Derek   still   has   interest   in   your   property   at   {Address}.   If   the   timing  
+is   better   this   week   or   next,   I   can   help   find   a   slot   that   works.   Would   you   prefer   afternoons   or  
+evenings ?”  
+ 
+Final   Touch   (7   days   after   no   show)  
+“Hi   {FirstName},   I   don’t   want   to   bother   you,   but   Derek’s   calendar   is   open   for   a   few   more   spots  
+this   week.   Should   I   hold   one   for   you,   or   check   back   later   in   the   year?”  
+(If   no   reply,   mark   as   “Dormant   –   Revisit   Later.”)  
+ 
