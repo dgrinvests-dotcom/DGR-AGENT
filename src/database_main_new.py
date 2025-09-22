@@ -1,5 +1,8 @@
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from pathlib import Path
 import uvicorn
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
@@ -16,11 +19,33 @@ app = FastAPI(title="AI Real Estate Outreach Agent", version="1.0.0")
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "https://web-production-0c70c.up.railway.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Serve React frontend
+frontend_path = Path(__file__).parent.parent / "frontend" / "build"
+
+if frontend_path.exists():
+    # Serve static files (CSS, JS, images)
+    app.mount("/static", StaticFiles(directory=frontend_path / "static"), name="static")
+    
+    # Serve React app for all non-API routes
+    @app.get("/{full_path:path}")
+    async def serve_react_app(full_path: str):
+        # If it's an API route, let FastAPI handle it
+        if full_path.startswith("api/") or full_path.startswith("webhooks/") or full_path.startswith("docs") or full_path.startswith("openapi.json") or full_path.startswith("health"):
+            raise HTTPException(status_code=404, detail="Not found")
+        
+        # Check if file exists in build directory
+        file_path = frontend_path / full_path
+        if file_path.is_file():
+            return FileResponse(file_path)
+        
+        # Otherwise serve index.html (React Router will handle routing)
+        return FileResponse(frontend_path / "index.html")
 
 # Database helper functions
 def get_db_connection():
