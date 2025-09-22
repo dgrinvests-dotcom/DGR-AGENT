@@ -155,6 +155,15 @@ db = Database("agent_estate.db")
 @app.on_event("startup")
 async def startup_event():
     print("🚀 Starting AI Real Estate Agent Backend...")
+    
+    # Initialize database schema
+    from init_database import init_complete_database
+    init_success = init_complete_database()
+    if init_success:
+        print("✅ Database schema initialized")
+    else:
+        print("❌ Database initialization failed")
+    
     print("✅ System ready for real estate outreach")
 
 @app.on_event("shutdown")
@@ -842,6 +851,33 @@ async def process_incoming_sms(from_number: str, message: str, to_number: str):
         print(f"✅ AI processing complete")
         print(f"📊 Stage: {result.get('conversation_stage', 'unknown')}")
         print(f"🎯 Next: {result.get('next_agent', 'unknown')}")
+        
+        # Send AI response via SMS
+        if result.get("messages") and len(result["messages"]) > 1:
+            # Get the last AI message (response)
+            ai_message = result["messages"][-1]
+            if hasattr(ai_message, 'content') and ai_message.content:
+                print(f"📤 Sending AI response: {ai_message.content[:100]}...")
+                
+                # Import and use Telnyx service
+                from services.telnyx_service import TelnyxSMSService
+                sms_service = TelnyxSMSService()
+                
+                # Send SMS response
+                sms_result = sms_service.send_sms(
+                    to_number=from_number,
+                    message=ai_message.content,
+                    state=result
+                )
+                
+                if sms_result.get("success"):
+                    print(f"✅ SMS response sent successfully")
+                else:
+                    print(f"❌ Failed to send SMS: {sms_result.get('error', 'Unknown error')}")
+            else:
+                print(f"⚠️ No AI response content to send")
+        else:
+            print(f"⚠️ No AI response messages found")
         
         conn.close()
         
