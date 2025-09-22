@@ -4,7 +4,7 @@ Handles SMS sending, delivery tracking, and webhook processing
 """
 
 import os
-from telnyx import Telnyx
+import telnyx
 import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime
@@ -30,8 +30,8 @@ class TelnyxSMSService:
         if not self.api_key:
             raise ValueError("TELNYX_API_KEY environment variable is required")
         
-        # Configure Telnyx client with new SDK
-        self.client = Telnyx(api_key=self.api_key)
+        # Configure Telnyx client
+        telnyx.api_key = self.api_key
         
         self.logger = logging.getLogger("telnyx_service")
         
@@ -97,11 +97,11 @@ class TelnyxSMSService:
             # Send SMS via Telnyx
             self.logger.info(f"Sending SMS to {to_number}: {message[:50]}...")
             
-            response = self.client.messages.create(**message_data)
+            response = telnyx.Message.create(**message_data)
             
             # Extract response data
-            message_id = response.data.id if hasattr(response, 'data') else response.id
-            status = response.data.status if hasattr(response, 'data') else getattr(response, 'status', 'unknown')
+            message_id = response.id
+            status = response.to_dict().get("data", {}).get("status", "unknown")
             
             # Log successful send
             self.logger.info(f"SMS sent successfully - ID: {message_id}, Status: {status}")

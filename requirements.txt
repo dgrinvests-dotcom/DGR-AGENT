@@ -29,7 +29,7 @@ google-auth-oauthlib==1.1.0
 google-auth-httplib2==0.1.1
 google-api-python-client==2.108.0
 openpyxl==3.1.2
-telnyx>=3.0.0
+telnyx==2.1.6
 six>=1.16.0
 langgraph==0.0.55
 langchain==0.2.5
