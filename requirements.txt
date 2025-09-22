@@ -28,4 +28,8 @@ google-auth==2.23.4
 google-auth-oauthlib==1.1.0
 google-auth-httplib2==0.1.1
 google-api-python-client==2.108.0
-openpyxl==3.1.2.1
+openpyxl==3.1.2
+telnyx==2.0.0
+langgraph==0.0.26
+langchain==0.1.0
+langchain-openai==0.0.5
