@@ -816,8 +816,7 @@ async def process_incoming_sms(from_number: str, message: str, to_number: str):
                 property_type=lead[6],
                 campaign_id=lead[7],
                 lead_phone=from_number,
-                lead_email=lead[4] if lead[4] else "",
-                incoming_message=message
+                lead_email=lead[4] if lead[4] else ""
             )
         else:
             # Create new lead for unknown number
@@ -828,9 +827,12 @@ async def process_incoming_sms(from_number: str, message: str, to_number: str):
                 property_address="Unknown Property",
                 property_type="fix_flip",
                 campaign_id="incoming",
-                lead_phone=from_number,
-                incoming_message=message
+                lead_phone=from_number
             )
+        
+        # Add the incoming message to the state
+        from langchain_core.messages import HumanMessage
+        state["messages"] = [HumanMessage(content=message)]
         
         # Run the conversation through LangGraph
         print(f"🤖 Processing through AI system...")
