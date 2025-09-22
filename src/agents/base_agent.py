@@ -306,8 +306,8 @@ class ComplianceChecker:
         try:
             result = conn.execute("""
                 SELECT COUNT(*) FROM opt_outs 
-                WHERE phone_number = ? OR email = ?
-            """, (phone_number, phone_number)).fetchone()
+                WHERE phone_number = ?
+            """, (phone_number,)).fetchone()
             return result[0] > 0
         except Exception as e:
             self.logger.error(f"Failed to check opt-out status: {e}")

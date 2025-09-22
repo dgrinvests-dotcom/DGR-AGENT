@@ -851,6 +851,8 @@ async def process_incoming_sms(from_number: str, message: str, to_number: str):
         print(f"✅ AI processing complete")
         print(f"📊 Stage: {result.get('conversation_stage', 'unknown')}")
         print(f"🎯 Next: {result.get('next_agent', 'unknown')}")
+        print(f"🔍 Result keys: {list(result.keys())}")
+        print(f"📝 Messages count: {len(result.get('messages', []))}")
         
         # Send AI response via SMS
         if result.get("messages") and len(result["messages"]) > 1:
