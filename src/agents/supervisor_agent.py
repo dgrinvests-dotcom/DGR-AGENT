@@ -93,49 +93,18 @@ class SupervisorAgent(BaseRealEstateAgent):
     
     def _route_user_response(self, state: RealEstateAgentState, user_message: str) -> Dict[str, Any]:
         """
-        Route user response to appropriate property specialist
+        Route user response to SMS agent for conversation handling
         """
-        # Analyze the user message
-        message_analysis = self.analyze_user_message(user_message, {
-            "property_type": state["property_type"],
-            "conversation_stage": state["conversation_stage"],
-            "qualification_data": state["qualification_data"]
-        })
-        
-        # Update state with analysis
-        state["conversation_sentiment"] = message_analysis.get("sentiment", "neutral")
-        state["user_communication_style"] = message_analysis.get("style", "neutral")
-        
-        # Check for immediate routing needs
-        intent = message_analysis.get("intent", "unknown")
-        
-        if intent == "not_interested":
-            return {
-                "next_agent": "END",
-                "action": "mark_not_interested",
-                "state_updates": {
-                    "conversation_stage": "not_interested",
-                    "next_action": "mark_not_interested"
-                }
+        # For inbound messages, route to SMS agent in conversation mode
+        return {
+            "next_agent": "sms_agent",
+            "action": "process_inbound_message",
+            "state_updates": {
+                "conversation_mode": "inbound_response",
+                "incoming_message": user_message,
+                "next_action": "generate_response"
             }
-        
-        elif intent == "ready_to_book":
-            return {
-                "next_agent": "booking_agent",
-                "action": "schedule_appointment",
-                "state_updates": {
-                    "conversation_stage": "booking",
-                    "next_action": "schedule_appointment"
-                }
-            }
-        
-        elif intent == "objection":
-            # Route to property specialist for objection handling
-            return self._route_to_property_specialist(state, "handle_objection")
-        
-        else:
-            # Route to appropriate property specialist
-            return self._route_to_property_specialist(state, "continue_qualification")
+        }
     
     def _route_to_property_specialist(self, state: RealEstateAgentState, action: str) -> Dict[str, Any]:
         """

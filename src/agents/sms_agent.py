@@ -45,7 +45,7 @@ class SMSAgent(BaseRealEstateAgent):
     
     def process_message(self, state: RealEstateAgentState, user_message: str = None) -> Dict[str, Any]:
         """
-        Process SMS sending request
+        Process SMS request - either sending outbound or responding to inbound
         
         Args:
             state: Current conversation state
@@ -61,6 +61,10 @@ class SMSAgent(BaseRealEstateAgent):
             state["current_agent"] = "sms_agent"
             if "sms_agent" not in state["agent_history"]:
                 state["agent_history"].append("sms_agent")
+            
+            # Check if this is an inbound response (conversation mode)
+            if state.get("conversation_mode") == "inbound_response":
+                return self._handle_inbound_conversation(state)
             
             # Check if SMS service is available
             if not self.sms_available:
@@ -127,6 +131,136 @@ class SMSAgent(BaseRealEstateAgent):
         except Exception as e:
             self.handle_error(state, e)
             return self._fallback_to_email(state, f"SMS agent error: {str(e)}")
+    
+    def _handle_inbound_conversation(self, state: RealEstateAgentState) -> Dict[str, Any]:
+        """
+        Handle inbound conversation - generate response and send SMS
+        """
+        try:
+            # Get the incoming message
+            incoming_message = state.get("incoming_message", "")
+            if not incoming_message:
+                return {"success": False, "error": "No incoming message to process"}
+            
+            # Update conversation stage based on current state and message
+            self._update_conversation_stage(state, incoming_message)
+            
+            # Generate appropriate response message
+            response_message = self._generate_conversation_response(state, incoming_message)
+            
+            if not response_message:
+                return {"success": False, "error": "Failed to generate response"}
+            
+            # Send the response via SMS
+            phone_number = state.get("lead_phone")
+            if not phone_number:
+                return {"success": False, "error": "No phone number available"}
+            
+            formatted_phone = format_phone_number(phone_number)
+            
+            # Check compliance for response
+            compliance_result = self._check_sms_compliance(state, formatted_phone)
+            if not compliance_result["compliant"]:
+                return {"success": False, "error": f"Compliance failed: {compliance_result['reason']}"}
+            
+            # Send SMS response
+            send_result = self.sms_service.send_sms(
+                to_number=formatted_phone,
+                message=response_message,
+                state=state
+            )
+            
+            if send_result["success"]:
+                # Add AI message to state
+                from langchain_core.messages import AIMessage
+                if "messages" not in state or not state["messages"]:
+                    state["messages"] = []
+                state["messages"].append(AIMessage(content=response_message))
+                
+                # Update state
+                state["last_contact_method"] = "sms"
+                state["last_contact_time"] = datetime.now().isoformat()
+                state["conversation_stage"] = "responding"
+                
+                return {
+                    "success": True,
+                    "action": "conversation_response_sent",
+                    "message_id": send_result["message_id"],
+                    "response_message": response_message,
+                    "next_agent": "END",
+                    "state_updates": {
+                        "messages": state["messages"],
+                        "last_contact_method": "sms",
+                        "last_contact_time": datetime.now().isoformat(),
+                        "conversation_stage": "responding"
+                    }
+                }
+            else:
+                return {"success": False, "error": send_result.get("error", "SMS sending failed")}
+                
+        except Exception as e:
+            self.logger.error(f"Inbound conversation handling failed: {e}")
+            return {"success": False, "error": str(e)}
+    
+    def _update_conversation_stage(self, state: RealEstateAgentState, message: str):
+        """Update conversation stage based on incoming message"""
+        current_stage = state.get("conversation_stage", "initial")
+        
+        # Simple stage progression logic
+        if current_stage == "initial":
+            state["conversation_stage"] = "qualifying"
+        elif current_stage == "qualifying":
+            # Check if ready for booking
+            booking_keywords = ["call", "schedule", "appointment", "meeting", "yes", "interested"]
+            if any(keyword in message.lower() for keyword in booking_keywords):
+                state["conversation_stage"] = "booking"
+            else:
+                state["conversation_stage"] = "qualifying"
+    
+    def _generate_conversation_response(self, state: RealEstateAgentState, incoming_message: str) -> str:
+        """
+        Generate conversation response based on current stage and incoming message
+        Uses existing SMS message generation logic
+        """
+        # Update qualification data based on incoming message
+        self._extract_qualification_data(state, incoming_message)
+        
+        # Use existing message generation logic
+        return self._generate_sms_message(state)
+    
+    def _extract_qualification_data(self, state: RealEstateAgentState, message: str):
+        """Extract qualification data from incoming message"""
+        message_lower = message.lower()
+        qualification_data = state.get("qualification_data", {})
+        property_type = state.get("property_type", "fix_flip")
+        
+        # Extract data based on property type
+        if property_type == "fix_flip":
+            if "vacant" in message_lower:
+                qualification_data["occupancy_status"] = "vacant"
+            elif "rented" in message_lower or "tenant" in message_lower:
+                qualification_data["occupancy_status"] = "rented"
+            elif "live" in message_lower or "occupied" in message_lower:
+                qualification_data["occupancy_status"] = "owner_occupied"
+            
+            if "good condition" in message_lower or "excellent" in message_lower:
+                qualification_data["condition"] = "good"
+            elif "needs work" in message_lower or "repairs" in message_lower:
+                qualification_data["condition"] = "needs_work"
+                
+        elif property_type == "vacant_land":
+            # Extract acreage
+            import re
+            acreage_match = re.search(r'(\d+(?:\.\d+)?)\s*acre', message_lower)
+            if acreage_match:
+                qualification_data["acreage"] = acreage_match.group(1)
+            
+            if "road access" in message_lower or "accessible" in message_lower:
+                qualification_data["road_access"] = "yes"
+            elif "landlocked" in message_lower:
+                qualification_data["road_access"] = "no"
+        
+        state["qualification_data"] = qualification_data
     
     def _generate_sms_message(self, state: RealEstateAgentState) -> str:
         """
