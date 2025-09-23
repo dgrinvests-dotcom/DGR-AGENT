@@ -903,7 +903,7 @@ async def process_incoming_sms(from_number: str, message: str, to_number: str):
             conn.execute(
                 """
                 UPDATE leads
-                SET conversation_stage = ?, qualification_data = ?, status = 'responding', last_contact_date = CURRENT_TIMESTAMP
+                SET conversation_stage = ?, qualification_data = ?, status = 'responding'
                 WHERE phone = ?
                 """,
                 (
