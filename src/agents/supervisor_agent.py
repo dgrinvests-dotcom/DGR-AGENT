@@ -191,7 +191,7 @@ class SupervisorAgent(BaseRealEstateAgent):
         """
 
 
-def supervisor_agent_node(state: RealEstateAgentState) -> Dict[str, Any]:
+def supervisor_agent_node(state: RealEstateAgentState) -> RealEstateAgentState:
     """
     Node function for supervisor agent in LangGraph
     """
@@ -202,7 +202,15 @@ def supervisor_agent_node(state: RealEstateAgentState) -> Dict[str, Any]:
     if state["messages"] and isinstance(state["messages"][-1], HumanMessage):
         user_message = state["messages"][-1].content
     
-    return agent.process_message(state, user_message)
+    # Process the message and get routing decision
+    result = agent.process_message(state, user_message)
+    
+    # Update state with any state_updates from the result
+    if "state_updates" in result:
+        for key, value in result["state_updates"].items():
+            state[key] = value
+    
+    return state
 
 
 def route_supervisor_decision(state: RealEstateAgentState) -> str:
