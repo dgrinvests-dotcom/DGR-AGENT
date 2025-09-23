@@ -53,6 +53,7 @@ def create_complete_real_estate_graph():
         route_supervisor_decision,
         {
             "communication_router": "communication_router",
+            "sms_agent": "sms_agent",
             "fix_flip_agent": "fix_flip_agent",
             "vacant_land_agent": "vacant_land_agent",
             "rental_agent": "rental_agent",
