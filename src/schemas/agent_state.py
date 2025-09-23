@@ -95,6 +95,10 @@ class RealEstateAgentState(MessagesState):
     email_failed: bool
     total_messages_sent: int
     
+    # Conversation Mode / Inbound Context
+    conversation_mode: Optional[Literal["inbound_response", "outbound_campaign"]]
+    incoming_message: Optional[str]
+    
     # Conversation State
     conversation_stage: Literal[
         "initial", 
@@ -185,6 +189,10 @@ def create_initial_state(
         sms_failed=False,
         email_failed=False,
         total_messages_sent=0,
+        
+        # Conversation Mode / Inbound Context
+        conversation_mode=None,
+        incoming_message=None,
         
         # Conversation State
         conversation_stage="initial",
