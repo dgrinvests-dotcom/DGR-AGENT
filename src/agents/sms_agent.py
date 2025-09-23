@@ -274,13 +274,13 @@ class SMSAgent(BaseRealEstateAgent):
         # Get property-specific message templates
         if stage == "initial":
             return self._get_initial_sms_message(property_type, lead_name, property_address)
-        elif stage == "qualifying":
+        elif stage == "qualifying" or stage == "responding":
             return self._get_qualifying_sms_message(property_type, state)
         elif stage == "follow_up":
             return self._get_follow_up_sms_message(property_type, state)
         else:
-            # Default message
-            return f"Hi {lead_name}, this is Derek from Real Estate Solutions. Are you still interested in discussing your property at {property_address}? Reply STOP to opt out."
+            # Default response for inbound messages
+            return f"Thanks for reaching out! I'd love to learn more about your property. Is it currently vacant, rented, or owner-occupied? Reply STOP to opt out."
     
     def _get_initial_sms_message(self, property_type: str, lead_name: str, property_address: str) -> str:
         """
@@ -307,7 +307,7 @@ class SMSAgent(BaseRealEstateAgent):
             if not qualification_data.get("occupancy_status"):
                 return f"Great! I just need a few quick details to see if it's a fit. Is the property currently vacant, rented, or owner-occupied? Reply STOP to opt out."
             elif not qualification_data.get("condition"):
-                return f"And how's the condition? Any recent repairs or major issues we should know about? Reply STOP to opt out."
+                return f"Perfect! And how's the condition? Any recent repairs or major issues we should know about? Reply STOP to opt out."
             else:
                 return f"Thanks for the info! Based on what you shared, we may be able to make a fair cash offer. Want to schedule a quick call to go over next steps? Reply STOP to opt out."
         

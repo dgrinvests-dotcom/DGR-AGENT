@@ -7,11 +7,9 @@ import uvicorn
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
 from datetime import datetime
-import uuid
-import sqlite3
 import json
-import os
-import threading
+import sqlite3
+import uuid
 # Email monitoring removed - using direct agent communication
 
 app = FastAPI(title="AI Real Estate Outreach Agent", version="1.0.0")
@@ -827,17 +825,31 @@ async def process_incoming_sms(from_number: str, message: str, to_number: str):
                 lead_phone=from_number,
                 lead_email=lead[4] if lead[4] else ""
             )
+            # Set to qualifying stage since they're responding to outreach
+            state["conversation_stage"] = "qualifying"
         else:
-            # Create new lead for unknown number
+            # Create new lead for unknown number - they're responding to outreach
             lead_id = str(uuid.uuid4())
+            
+            # Insert new lead into database
+            conn.execute("""
+                INSERT INTO leads (id, first_name, last_name, phone, email, property_address, 
+                                 property_type, campaign_id, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """, (lead_id, "Unknown", "Lead", from_number, "", "Unknown Property", 
+                  "fix_flip", "incoming_response", "responding"))
+            conn.commit()
+            
             state = create_initial_state(
                 lead_id=lead_id,
-                lead_name="New Lead",
+                lead_name="Unknown Lead",
                 property_address="Unknown Property",
                 property_type="fix_flip",
-                campaign_id="incoming",
+                campaign_id="incoming_response",
                 lead_phone=from_number
             )
+            # Set to qualifying stage since they're responding to outreach
+            state["conversation_stage"] = "qualifying"
         
         # Add the incoming message to the state
         from langchain_core.messages import HumanMessage
