@@ -140,7 +140,10 @@ class SMSAgent(BaseRealEstateAgent):
             # Get the incoming message
             incoming_message = state.get("incoming_message", "")
             if not incoming_message:
+                print("❌ No incoming message to process")
                 return {"success": False, "error": "No incoming message to process"}
+            
+            print(f"📝 Processing incoming message: {incoming_message}")
             
             # Update conversation stage based on current state and message
             self._update_conversation_stage(state, incoming_message)
@@ -148,7 +151,10 @@ class SMSAgent(BaseRealEstateAgent):
             # Generate appropriate response message
             response_message = self._generate_conversation_response(state, incoming_message)
             
+            print(f"🤖 Generated response: {response_message}")
+            
             if not response_message:
+                print("❌ Failed to generate response")
                 return {"success": False, "error": "Failed to generate response"}
             
             # Send the response via SMS
@@ -160,8 +166,17 @@ class SMSAgent(BaseRealEstateAgent):
             
             # Check compliance for response
             compliance_result = self._check_sms_compliance(state, formatted_phone)
+            print(f"✅ Compliance check: {compliance_result}")
             if not compliance_result["compliant"]:
+                print(f"❌ Compliance failed: {compliance_result['reason']}")
                 return {"success": False, "error": f"Compliance failed: {compliance_result['reason']}"}
+            
+            # Check if SMS service is available
+            if not self.sms_available:
+                print("❌ SMS service not available")
+                return {"success": False, "error": "SMS service not available"}
+            
+            print(f"📤 Sending SMS to {formatted_phone}: {response_message}")
             
             # Send SMS response
             send_result = self.sms_service.send_sms(
@@ -169,6 +184,8 @@ class SMSAgent(BaseRealEstateAgent):
                 message=response_message,
                 state=state
             )
+            
+            print(f"📊 SMS send result: {send_result}")
             
             if send_result["success"]:
                 # Add AI message to state
