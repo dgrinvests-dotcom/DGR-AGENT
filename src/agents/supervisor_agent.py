@@ -202,6 +202,12 @@ def supervisor_agent_node(state: RealEstateAgentState) -> RealEstateAgentState:
     if state["messages"] and isinstance(state["messages"][-1], HumanMessage):
         user_message = state["messages"][-1].content
     
+    # Robust inbound handling: prefer explicit inbound context if provided
+    if user_message is None and state.get("conversation_mode") == "inbound_response":
+        inbound_text = state.get("incoming_message")
+        if inbound_text:
+            user_message = inbound_text
+    
     # Process the message and get routing decision
     result = agent.process_message(state, user_message)
     
