@@ -154,6 +154,10 @@ def route_supervisor_decision(state: RealEstateAgentState) -> str:
     if next_action == "initial_outreach":
         return "communication_router"
     
+    # Inbound response routing
+    elif next_action == "generate_response":
+        return "sms_agent"
+    
     # Property specialist routing based on type
     elif next_action in ["continue_qualification", "handle_objection"]:
         if property_type == "fix_flip":

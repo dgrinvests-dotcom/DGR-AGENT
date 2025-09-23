@@ -449,12 +449,26 @@ class SMSAgent(BaseRealEstateAgent):
         """
 
 
-def sms_agent_node(state: RealEstateAgentState) -> Dict[str, Any]:
+def sms_agent_node(state: RealEstateAgentState) -> RealEstateAgentState:
     """
     Node function for SMS agent in LangGraph
     """
     agent = SMSAgent()
-    return agent.process_message(state)
+    result = agent.process_message(state)
+    
+    # Update state with agent results
+    if result.get("state_updates"):
+        for key, value in result["state_updates"].items():
+            state[key] = value
+    
+    # Add response message to state for SMS sending
+    if result.get("response_message"):
+        state["generated_response"] = result["response_message"]
+    
+    # Set next agent
+    state["next_agent"] = result.get("next_agent", "END")
+    
+    return state
 
 
 def route_sms_result(state: RealEstateAgentState) -> str:
