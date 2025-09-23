@@ -2,7 +2,7 @@
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pathlib import Path
 import uvicorn
 from typing import Dict, Any, List, Optional
@@ -199,6 +199,117 @@ async def simulate_chat(req: SimulateChatRequest):
         return {"success": False, "error": str(e)}
     finally:
         conn.close()
+
+@app.get("/simulate/ui", response_class=HTMLResponse)
+async def simulate_ui():
+    """Serve a minimal HTML UI for simulation without building the React app."""
+    return """
+    <!DOCTYPE html>
+    <html lang=\"en\">
+    <head>
+      <meta charset=\"UTF-8\" />
+      <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />
+      <title>Simulation Chat</title>
+      <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 0; background: #f6f7fb; }
+        .container { max-width: 960px; margin: 24px auto; padding: 16px; }
+        .card { background: #fff; border: 1px solid #eee; border-radius: 8px; padding: 16px; }
+        .row { display: flex; gap: 8px; margin-bottom: 8px; }
+        .row > * { flex: 1; }
+        .chat { border: 1px solid #eee; border-radius: 8px; padding: 12px; background: #fafafa; height: 320px; overflow-y: auto; }
+        .bubble { display:inline-block; padding:8px 12px; border-radius:12px; margin:6px 0; max-width:75%; white-space:pre-wrap; }
+        .user { background:#1976d2; color:#fff; margin-left:auto; }
+        .agent { background:#e0e0e0; color:#222; margin-right:auto; }
+        .state { font-family: monospace; font-size: 12px; white-space: pre; background: #f3f3f3; padding: 8px; border-radius: 6px; }
+        button { padding: 8px 12px; }
+        input, select { padding: 8px; }
+      </style>
+    </head>
+    <body>
+      <div class=\"container\">
+        <h2>Simulation Chat (No SMS Cost)</h2>
+        <div class=\"card\">
+          <div class=\"row\">
+            <input id=\"from\" placeholder=\"From Number (+1...)\" value=\"+16095551234\" />
+            <input id=\"first\" placeholder=\"First Name\" value=\"Test\" />
+            <input id=\"last\" placeholder=\"Last Name\" value=\"Lead\" />
+          </div>
+          <div class=\"row\">
+            <input id=\"addr\" placeholder=\"Property Address\" value=\"123 Main St, Dallas, TX\" />
+            <select id=\"ptype\">
+              <option value=\"fix_flip\" selected>Fix & Flip</option>
+              <option value=\"vacant_land\">Vacant Land</option>
+              <option value=\"long_term_rental\">Long-term Rental</option>
+            </select>
+            <input id=\"camp\" placeholder=\"Campaign ID\" value=\"incoming_response\" />
+          </div>
+          <div id=\"chat\" class=\"chat\"></div>
+          <div class=\"row\">
+            <input id=\"msg\" placeholder=\"Type message...\" />
+            <button id=\"send\">Send</button>
+          </div>
+          <div class=\"row\">
+            <div style=\"flex:1\">
+              <strong>Stage</strong>
+              <div id=\"stage\">—</div>
+            </div>
+            <div style=\"flex:2\">
+              <strong>Qualification Data</strong>
+              <div id=\"qdata\" class=\"state\">{}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <script>
+        const chat = document.getElementById('chat');
+        const msg = document.getElementById('msg');
+        const from = document.getElementById('from');
+        const first = document.getElementById('first');
+        const last = document.getElementById('last');
+        const addr = document.getElementById('addr');
+        const ptype = document.getElementById('ptype');
+        const camp = document.getElementById('camp');
+        const stage = document.getElementById('stage');
+        const qdata = document.getElementById('qdata');
+        const sendBtn = document.getElementById('send');
+
+        function addBubble(role, text) {
+          const div = document.createElement('div');
+          div.className = 'bubble ' + (role === 'user' ? 'user' : 'agent');
+          div.textContent = text;
+          chat.appendChild(div);
+          chat.scrollTop = chat.scrollHeight;
+        }
+
+        async function simulate() {
+          const body = {
+            from_number: from.value,
+            text: msg.value,
+            first_name: first.value,
+            last_name: last.value,
+            property_address: addr.value,
+            property_type: ptype.value,
+            campaign_id: camp.value
+          };
+          try {
+            addBubble('user', body.text);
+            msg.value = '';
+            const res = await fetch('/simulate/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+            const data = await res.json();
+            if (data.success && data.response) addBubble('agent', data.response);
+            stage.textContent = data.conversation_stage || '—';
+            qdata.textContent = JSON.stringify(data.qualification_data || {}, null, 2);
+          } catch (e) {
+            alert('Request failed');
+          }
+        }
+
+        sendBtn.addEventListener('click', simulate);
+        msg.addEventListener('keydown', (e) => { if (e.key === 'Enter') simulate(); });
+      </script>
+    </body>
+    </html>
+    """
 
 # Initialize database
 class Database:
