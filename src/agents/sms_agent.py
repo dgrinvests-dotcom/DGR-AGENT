@@ -253,17 +253,33 @@ class SMSAgent(BaseRealEstateAgent):
         
         # Extract data based on property type
         if property_type == "fix_flip":
-            if "vacant" in message_lower:
+            # Occupancy synonyms
+            if any(k in message_lower for k in ["vacant", "empty", "no one lives", "not occupied", "no occupants"]):
                 qualification_data["occupancy_status"] = "vacant"
-            elif "rented" in message_lower or "tenant" in message_lower:
+            elif any(k in message_lower for k in ["rented", "tenant", "tenanted", "leased", "lease"]):
                 qualification_data["occupancy_status"] = "rented"
-            elif "live" in message_lower or "occupied" in message_lower:
+            elif any(k in message_lower for k in ["i live", "we live", "owner occupied", "owner-occupied", "live there", "live in it", "occupied by me", "primary residence"]):
                 qualification_data["occupancy_status"] = "owner_occupied"
             
-            if "good condition" in message_lower or "excellent" in message_lower:
-                qualification_data["condition"] = "good"
-            elif "needs work" in message_lower or "repairs" in message_lower:
+            # Condition / repairs extraction
+            good_markers = ["good", "great", "excellent", "fine", "ok", "okay", "no issues", "no problem"]
+            needs_work_markers = ["needs work", "needs repairs", "repairs", "major issues", "bad", "poor", "fixer", "fixer-upper", "rough"]
+            no_repairs_markers = ["no repairs", "none", "nothing", "no work", "no major issues"]
+            some_repairs_markers = ["some repairs", "minor repairs", "few repairs", "a few issues", "needs some work"]
+            
+            if any(k in message_lower for k in good_markers):
+                # Only set if not already marked as needs_work
+                if qualification_data.get("condition") != "needs_work":
+                    qualification_data["condition"] = "good"
+            if any(k in message_lower for k in needs_work_markers):
                 qualification_data["condition"] = "needs_work"
+            
+            if any(k in message_lower for k in no_repairs_markers):
+                qualification_data["repairs_needed"] = "none"
+            elif any(k in message_lower for k in some_repairs_markers):
+                qualification_data["repairs_needed"] = "minor"
+            elif "repairs" in message_lower and "no" not in message_lower:
+                qualification_data["repairs_needed"] = "yes"
                 
         elif property_type == "vacant_land":
             # Extract acreage
@@ -276,6 +292,23 @@ class SMSAgent(BaseRealEstateAgent):
                 qualification_data["road_access"] = "yes"
             elif "landlocked" in message_lower:
                 qualification_data["road_access"] = "no"
+            # Utilities inference
+            if any(k in message_lower for k in ["no utilities", "off-grid", "off grid"]):
+                qualification_data["utilities"] = "not_nearby"
+            elif any(k in message_lower for k in ["utilities nearby", "power nearby", "water nearby", "septic", "sewer", "electric"]):
+                qualification_data["utilities"] = "nearby"
+        else:
+            # long_term_rental
+            if any(k in message_lower for k in ["rented", "tenant", "tenanted", "leased"]):
+                qualification_data["rental_status"] = "rented"
+            elif "vacant" in message_lower:
+                qualification_data["rental_status"] = "vacant"
+            # Condition cues
+            if any(k in message_lower for k in ["good", "fine", "ok", "okay", "no issues", "none"]):
+                if qualification_data.get("condition") != "needs_work":
+                    qualification_data["condition"] = "good"
+            if any(k in message_lower for k in ["needs work", "repairs", "bad", "poor", "fixer"]):
+                qualification_data["condition"] = "needs_work"
         
         state["qualification_data"] = qualification_data
     
@@ -322,11 +355,25 @@ class SMSAgent(BaseRealEstateAgent):
         
         if property_type == "fix_flip":
             if not qualification_data.get("occupancy_status"):
-                return f"Great! I just need a few quick details to see if it's a fit. Is the property currently vacant, rented, or owner-occupied? Reply STOP to opt out."
-            elif not qualification_data.get("condition"):
-                return f"Perfect! And how's the condition? Any recent repairs or major issues we should know about? Reply STOP to opt out."
-            else:
-                return f"Thanks for the info! Based on what you shared, we may be able to make a fair cash offer. Want to schedule a quick call to go over next steps? Reply STOP to opt out."
+                return (
+                    "Great! I just need a few quick details to see if it's a fit. "
+                    "Is the property currently vacant, rented, or owner-occupied? Reply STOP to opt out."
+                )
+            # Ask condition/repairs progressively
+            if not qualification_data.get("condition") and not qualification_data.get("repairs_needed"):
+                return (
+                    "Perfect! And how's the condition? Any recent repairs or major issues we should know about? "
+                    "Reply STOP to opt out."
+                )
+            if not qualification_data.get("condition"):
+                return "Got it — and how's the overall condition? Reply STOP to opt out."
+            if not qualification_data.get("repairs_needed"):
+                return "Any recent repairs or major issues we should know about? Reply STOP to opt out."
+            # Otherwise propose booking
+            return (
+                "Thanks for the info! Based on what you shared, we may be able to make a fair cash offer. "
+                "Want to schedule a quick call to go over next steps? Reply STOP to opt out."
+            )
         
         elif property_type == "vacant_land":
             if not qualification_data.get("acreage"):

@@ -117,6 +117,16 @@ class Database:
             )
         ''')
         
+        # Add missing columns for conversation persistence (safe no-op if they already exist)
+        try:
+            cursor.execute("ALTER TABLE leads ADD COLUMN conversation_stage TEXT")
+        except Exception:
+            pass
+        try:
+            cursor.execute("ALTER TABLE leads ADD COLUMN qualification_data TEXT")
+        except Exception:
+            pass
+        
         # Create conversations table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS conversations (
@@ -815,18 +825,30 @@ async def process_incoming_sms(from_number: str, message: str, to_number: str):
         ).fetchone()
         
         if lead:
-            # Create state for existing lead
+            # Create state for existing lead (use column names for safety)
+            lead_row = dict_from_row(lead)
             state = create_initial_state(
-                lead_id=lead[0],
-                lead_name=f"{lead[1]} {lead[2]}",
-                property_address=lead[5],
-                property_type=lead[6],
-                campaign_id=lead[7],
+                lead_id=lead_row.get("id"),
+                lead_name=f"{lead_row.get('first_name','')} {lead_row.get('last_name','')}".strip(),
+                property_address=lead_row.get("property_address", "Unknown Property"),
+                property_type=lead_row.get("property_type", "fix_flip"),
+                campaign_id=lead_row.get("campaign_id", "incoming_response"),
                 lead_phone=from_number,
-                lead_email=lead[4] if lead[4] else ""
+                lead_email=lead_row.get("email", "") or ""
             )
-            # Set to qualifying stage since they're responding to outreach
-            state["conversation_stage"] = "qualifying"
+            # Load persisted conversation stage and qualification data if available
+            persisted_stage = lead_row.get("conversation_stage")
+            if persisted_stage:
+                state["conversation_stage"] = persisted_stage
+            else:
+                state["conversation_stage"] = "qualifying"
+            try:
+                persisted_q = lead_row.get("qualification_data")
+                if persisted_q:
+                    import json as _json
+                    state["qualification_data"] = _json.loads(persisted_q)
+            except Exception:
+                pass
         else:
             # Create new lead for unknown number - they're responding to outreach
             lead_id = str(uuid.uuid4())
@@ -875,6 +897,24 @@ async def process_incoming_sms(from_number: str, message: str, to_number: str):
             print(f"📨 Last contact method: {result['last_contact_method']}")
         if result.get("last_error"):
             print(f"⚠️ Last error: {result['last_error']}")
+        
+        # Persist updated conversation stage and qualification_data for continuity
+        try:
+            conn.execute(
+                """
+                UPDATE leads
+                SET conversation_stage = ?, qualification_data = ?, status = 'responding', last_contact_date = CURRENT_TIMESTAMP
+                WHERE phone = ?
+                """,
+                (
+                    result.get("conversation_stage", state.get("conversation_stage", "qualifying")),
+                    json.dumps(result.get("qualification_data", state.get("qualification_data", {}))),
+                    from_number,
+                ),
+            )
+            conn.commit()
+        except Exception as _e:
+            print(f"⚠️ Failed to persist conversation state: {_e}")
         
         conn.close()
         
