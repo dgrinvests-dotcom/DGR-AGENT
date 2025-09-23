@@ -374,12 +374,16 @@ class SMSAgent(BaseRealEstateAgent):
                 "reason": "User has opted out"
             }
         
-        # Check quiet hours
-        if not self.compliance_checker.check_quiet_hours():
-            return {
-                "compliant": False,
-                "reason": "Outside quiet hours (8 AM - 9 PM)"
-            }
+        # Check quiet hours (but allow inbound replies regardless of quiet hours)
+        if state.get("conversation_mode") != "inbound_response":
+            if not self.compliance_checker.check_quiet_hours():
+                return {
+                    "compliant": False,
+                    "reason": "Outside quiet hours (8 AM - 9 PM)"
+                }
+        else:
+            # Inbound replies are allowed outside quiet hours to complete conversations
+            print("🛡️ Compliance: bypassing quiet hours for inbound reply")
         
         # DNC check disabled - leads are pre-screened
         dnc_result = self.compliance_checker.check_dnc_status(phone_number)
