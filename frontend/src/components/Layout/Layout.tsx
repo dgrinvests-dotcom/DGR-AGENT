@@ -36,6 +36,7 @@ const menuItems = [
   { text: 'Campaigns', icon: <CampaignIcon />, path: '/campaigns' },
   { text: 'Leads', icon: <PeopleIcon />, path: '/leads' },
   { text: 'Conversations', icon: <ChatIcon />, path: '/conversations' },
+  { text: 'Simulate', icon: <ChatIcon />, path: '/simulate' },
   { text: 'Settings', icon: <SettingsIcon />, path: '/settings' },
 ];
 

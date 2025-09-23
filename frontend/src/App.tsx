@@ -9,6 +9,7 @@ import Campaigns from './pages/Campaigns';
 import Leads from './pages/Leads';
 import Conversations from './pages/Conversations';
 import Settings from './pages/Settings';
+import SimulateChat from './pages/SimulateChat';
 
 const theme = createTheme({
   palette: {
@@ -43,6 +44,7 @@ function App() {
               <Route path="/leads" element={<Leads />} />
               <Route path="/conversations" element={<Conversations />} />
               <Route path="/settings" element={<Settings />} />
+              <Route path="/simulate" element={<SimulateChat />} />
             </Routes>
           </Layout>
         </Router>
