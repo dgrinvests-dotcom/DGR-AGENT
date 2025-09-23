@@ -1,3 +1,4 @@
+ 
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -71,6 +72,136 @@ class LeadCreate(BaseModel):
     property_value: Optional[float] = None
     condition: Optional[str] = None
     notes: Optional[str] = None
+
+# Simulation Chat API
+class SimulateChatRequest(BaseModel):
+    from_number: str
+    text: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    property_address: Optional[str] = None
+    property_type: Optional[str] = "fix_flip"
+    campaign_id: Optional[str] = "incoming_response"
+
+@app.post("/simulate/chat")
+async def simulate_chat(req: SimulateChatRequest):
+    """
+    Simulate an inbound SMS without sending real messages.
+    Runs the full LangGraph flow but forces SMS simulation mode for this request only.
+    """
+    import os as _os
+    from langgraph_complete import create_complete_real_estate_graph
+    from schemas.agent_state import create_initial_state
+    from langchain_core.messages import HumanMessage
+
+    # Ensure simulation mode is ON for this request
+    _os.environ["SMS_SIMULATION"] = "1"
+
+    from_number = req.from_number
+    message = req.text
+
+    conn = get_db_connection()
+    try:
+        lead = conn.execute(
+            "SELECT * FROM leads WHERE phone = ?", (from_number,)
+        ).fetchone()
+
+        if lead:
+            lead_row = dict_from_row(lead)
+            state = create_initial_state(
+                lead_id=lead_row.get("id"),
+                lead_name=f"{lead_row.get('first_name','')} {lead_row.get('last_name','')}".strip() or "Unknown Lead",
+                property_address=lead_row.get("property_address", "Unknown Property"),
+                property_type=lead_row.get("property_type", req.property_type or "fix_flip"),
+                campaign_id=lead_row.get("campaign_id", req.campaign_id or "incoming_response"),
+                lead_phone=from_number,
+                lead_email=lead_row.get("email", "") or ""
+            )
+            # Load persisted continuity
+            persisted_stage = lead_row.get("conversation_stage")
+            if persisted_stage:
+                state["conversation_stage"] = persisted_stage
+            else:
+                state["conversation_stage"] = "qualifying"
+            try:
+                persisted_q = lead_row.get("qualification_data")
+                if persisted_q:
+                    import json as _json
+                    state["qualification_data"] = _json.loads(persisted_q)
+            except Exception:
+                pass
+        else:
+            # Create new lead for simulation
+            lead_id = str(uuid.uuid4())
+            conn.execute(
+                """
+                INSERT INTO leads (id, first_name, last_name, phone, email, property_address,
+                                   property_type, campaign_id, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'responding', CURRENT_TIMESTAMP)
+                """,
+                (
+                    lead_id,
+                    req.first_name or "Unknown",
+                    req.last_name or "Lead",
+                    from_number,
+                    "",
+                    req.property_address or "Unknown Property",
+                    req.property_type or "fix_flip",
+                    req.campaign_id or "incoming_response",
+                ),
+            )
+            conn.commit()
+            state = create_initial_state(
+                lead_id=lead_id,
+                lead_name=f"{req.first_name or 'Unknown'} {req.last_name or 'Lead'}",
+                property_address=req.property_address or "Unknown Property",
+                property_type=req.property_type or "fix_flip",
+                campaign_id=req.campaign_id or "incoming_response",
+                lead_phone=from_number,
+            )
+            state["conversation_stage"] = "qualifying"
+
+        # Add inbound message
+        state["messages"] = [HumanMessage(content=message)]
+        state["conversation_mode"] = "inbound_response"
+        state["incoming_message"] = message
+
+        # Run graph (simulation mode active for SMS agent)
+        graph = create_complete_real_estate_graph()
+        result = graph.invoke(state)
+
+        # Persist continuity fields
+        try:
+            conn.execute(
+                """
+                UPDATE leads
+                SET conversation_stage = ?, qualification_data = ?, status = 'responding'
+                WHERE phone = ?
+                """,
+                (
+                    result.get("conversation_stage", state.get("conversation_stage", "qualifying")),
+                    json.dumps(result.get("qualification_data", state.get("qualification_data", {}))),
+                    from_number,
+                ),
+            )
+            conn.commit()
+        except Exception as _e:
+            print(f"⚠️ Failed to persist conversation state (simulate): {_e}")
+
+        # Prepare response
+        response_text = result.get("generated_response") or ""
+        return {
+            "success": True,
+            "response": response_text,
+            "conversation_stage": result.get("conversation_stage", state.get("conversation_stage")),
+            "qualification_data": result.get("qualification_data", state.get("qualification_data", {})),
+            "simulation": True,
+        }
+
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
 
 # Initialize database
 class Database:

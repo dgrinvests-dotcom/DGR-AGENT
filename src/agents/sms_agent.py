@@ -42,6 +42,8 @@ class SMSAgent(BaseRealEstateAgent):
             self.sms_available = False
         
         self.compliance_checker = ComplianceChecker()
+        # Simulation mode: when enabled, do not send real SMS
+        self.simulation_mode = str(os.getenv("SMS_SIMULATION", "0")).lower() in ["1", "true", "yes"]
     
     def process_message(self, state: RealEstateAgentState, user_message: str = None) -> Dict[str, Any]:
         """
@@ -66,8 +68,8 @@ class SMSAgent(BaseRealEstateAgent):
             if state.get("conversation_mode") == "inbound_response":
                 return self._handle_inbound_conversation(state)
             
-            # Check if SMS service is available
-            if not self.sms_available:
+            # Check if SMS service is available (skip when simulating)
+            if not self.simulation_mode and not self.sms_available:
                 return self._fallback_to_email(state, "SMS service not available")
             
             # Validate phone number
@@ -95,12 +97,16 @@ class SMSAgent(BaseRealEstateAgent):
                 self.logger.warning(f"SMS content validation issues: {content_validation['issues']}")
                 # Continue anyway, but log issues
             
-            # Send SMS
-            send_result = self.sms_service.send_sms(
-                to_number=formatted_phone,
-                message=message,
-                state=state
-            )
+            # Send or simulate SMS
+            if self.simulation_mode:
+                print(f"🧪 Simulation: would send SMS to {formatted_phone}: {message}")
+                send_result = {"success": True, "message_id": "simulated", "status": "simulated"}
+            else:
+                send_result = self.sms_service.send_sms(
+                    to_number=formatted_phone,
+                    message=message,
+                    state=state
+                )
             
             if send_result["success"]:
                 self.log_agent_action(state, "sms_sent_successfully", {
@@ -171,19 +177,23 @@ class SMSAgent(BaseRealEstateAgent):
                 print(f"❌ Compliance failed: {compliance_result['reason']}")
                 return {"success": False, "error": f"Compliance failed: {compliance_result['reason']}"}
             
-            # Check if SMS service is available
-            if not self.sms_available:
+            # Check if SMS service is available (skip when simulating)
+            if not self.simulation_mode and not self.sms_available:
                 print("❌ SMS service not available")
                 return {"success": False, "error": "SMS service not available"}
             
             print(f"📤 Sending SMS to {formatted_phone}: {response_message}")
             
-            # Send SMS response
-            send_result = self.sms_service.send_sms(
-                to_number=formatted_phone,
-                message=response_message,
-                state=state
-            )
+            # Send or simulate SMS response
+            if self.simulation_mode:
+                print(f"🧪 Simulation: would send SMS to {formatted_phone}: {response_message}")
+                send_result = {"success": True, "message_id": "simulated", "status": "simulated"}
+            else:
+                send_result = self.sms_service.send_sms(
+                    to_number=formatted_phone,
+                    message=response_message,
+                    state=state
+                )
             
             print(f"📊 SMS send result: {send_result}")
             
@@ -311,6 +321,10 @@ class SMSAgent(BaseRealEstateAgent):
                 qualification_data["condition"] = "needs_work"
         
         state["qualification_data"] = qualification_data
+        try:
+            print(f"🔎 Qualification data updated: {state['qualification_data']}")
+        except Exception:
+            pass
     
     def _generate_sms_message(self, state: RealEstateAgentState) -> str:
         """
