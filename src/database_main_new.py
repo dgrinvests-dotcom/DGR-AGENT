@@ -834,8 +834,8 @@ async def process_incoming_sms(from_number: str, message: str, to_number: str):
             # Insert new lead into database
             conn.execute("""
                 INSERT INTO leads (id, first_name, last_name, phone, email, property_address, 
-                                 property_type, campaign_id, status, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                                 property_type, campaign_id, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """, (lead_id, "Unknown", "Lead", from_number, "", "Unknown Property", 
                   "fix_flip", "incoming_response", "responding"))
             conn.commit()
