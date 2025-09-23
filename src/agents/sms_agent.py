@@ -68,8 +68,10 @@ class SMSAgent(BaseRealEstateAgent):
             if state.get("conversation_mode") == "inbound_response":
                 return self._handle_inbound_conversation(state)
             
+            # Determine effective simulation (env or per-request state flag)
+            effective_sim = self.simulation_mode or bool(state.get("sms_simulation"))
             # Check if SMS service is available (skip when simulating)
-            if not self.simulation_mode and not self.sms_available:
+            if not effective_sim and not self.sms_available:
                 return self._fallback_to_email(state, "SMS service not available")
             
             # Validate phone number
@@ -98,7 +100,7 @@ class SMSAgent(BaseRealEstateAgent):
                 # Continue anyway, but log issues
             
             # Send or simulate SMS
-            if self.simulation_mode:
+            if effective_sim:
                 print(f"🧪 Simulation: would send SMS to {formatted_phone}: {message}")
                 send_result = {"success": True, "message_id": "simulated", "status": "simulated"}
             else:
@@ -177,15 +179,17 @@ class SMSAgent(BaseRealEstateAgent):
                 print(f"❌ Compliance failed: {compliance_result['reason']}")
                 return {"success": False, "error": f"Compliance failed: {compliance_result['reason']}"}
             
+            # Determine effective simulation (env or per-request state flag)
+            effective_sim = self.simulation_mode or bool(state.get("sms_simulation"))
             # Check if SMS service is available (skip when simulating)
-            if not self.simulation_mode and not self.sms_available:
+            if not effective_sim and not self.sms_available:
                 print("❌ SMS service not available")
                 return {"success": False, "error": "SMS service not available"}
             
             print(f"📤 Sending SMS to {formatted_phone}: {response_message}")
             
             # Send or simulate SMS response
-            if self.simulation_mode:
+            if effective_sim:
                 print(f"🧪 Simulation: would send SMS to {formatted_phone}: {response_message}")
                 send_result = {"success": True, "message_id": "simulated", "status": "simulated"}
             else:

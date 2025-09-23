@@ -89,13 +89,9 @@ async def simulate_chat(req: SimulateChatRequest):
     Simulate an inbound SMS without sending real messages.
     Runs the full LangGraph flow but forces SMS simulation mode for this request only.
     """
-    import os as _os
     from langgraph_complete import create_complete_real_estate_graph
     from schemas.agent_state import create_initial_state
     from langchain_core.messages import HumanMessage
-
-    # Ensure simulation mode is ON for this request
-    _os.environ["SMS_SIMULATION"] = "1"
 
     from_number = req.from_number
     message = req.text
@@ -165,6 +161,7 @@ async def simulate_chat(req: SimulateChatRequest):
         state["messages"] = [HumanMessage(content=message)]
         state["conversation_mode"] = "inbound_response"
         state["incoming_message"] = message
+        state["sms_simulation"] = True
 
         # Run graph (simulation mode active for SMS agent)
         graph = create_complete_real_estate_graph()
