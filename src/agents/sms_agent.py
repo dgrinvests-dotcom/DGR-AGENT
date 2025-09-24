@@ -278,31 +278,49 @@ class SMSAgent(BaseRealEstateAgent):
             return self._generate_sms_message(state)
 
     def _generate_llm_conversation_response(self, state: RealEstateAgentState, incoming_message: str) -> str:
-        """Generate response using LLM with comprehensive system prompt"""
+        """Generate response using LLM with comprehensive system prompt and conversation history"""
         prop_type = state.get("property_type", "fix_flip")
         lead_name = state.get("lead_name", "there")
         qualification_data = state.get("qualification_data", {})
         
-        # Build system prompt for conversational qualification
+        # Build conversation history for context
+        conversation_history = ""
+        messages = state.get("messages", [])
+        if messages:
+            recent_messages = messages[-10:]  # Last 10 messages for context
+            for msg in recent_messages:
+                content = getattr(msg, 'content', str(msg))
+                msg_type = type(msg).__name__
+                if 'Human' in msg_type or 'User' in msg_type:
+                    conversation_history += f"Lead: {content}\n"
+                elif 'AI' in msg_type or 'Assistant' in msg_type:
+                    conversation_history += f"Agent: {content}\n"
+        
+        # Build system prompt with conversation context
         system_prompt = f"""You are a professional real estate wholesaler having an SMS conversation with {lead_name} about their {prop_type.replace('_', ' ')} property.
 
 CURRENT QUALIFICATION STATUS: {qualification_data}
+
+RECENT CONVERSATION HISTORY:
+{conversation_history}
 
 QUALIFICATION REQUIREMENTS for {prop_type}:
 - fix_flip: occupancy_status, condition, repairs_needed, timeline, access, price_expectation
 - vacant_land: acreage, road_access, utilities, price_expectation  
 - long_term_rental: rental_status, condition, timeline, access, price_expectation
 
-CONVERSATION RULES:
-1. Ask ONE question at a time, keep responses under 160 characters
-2. Be conversational and natural, not robotic
-3. Always end with "Reply STOP to opt out"
-4. Progress through qualification systematically
-5. When ALL required fields are collected, offer to schedule a call
-6. Parse their response and update qualification data mentally
+CRITICAL RULES:
+1. NEVER ask about information already provided in the conversation history
+2. NEVER repeat questions you've already asked
+3. Look at the qualification status - if a field has a value, DON'T ask about it again
+4. Ask ONE new question at a time, keep responses under 160 characters
+5. Be conversational and natural, acknowledge their previous responses
+6. Always end with "Reply STOP to opt out"
+7. When ALL required fields are collected, offer to schedule a call
+8. If they've answered everything, move to booking
 
 RESPONSE PATTERNS:
-- "yes", "sure", "ok", "we can" = positive for access/timeline questions
+- "yes", "sure", "ok", "we can" = positive responses
 - "no", "can't", "unable" = negative responses
 - Numbers with $ or k = price expectations
 - Time references = timeline (this week, next month, asap, etc.)
@@ -310,7 +328,7 @@ RESPONSE PATTERNS:
 
 Their latest message: "{incoming_message}"
 
-Respond naturally and ask the next logical qualification question, or offer booking if complete."""
+Based on the conversation history and current qualification status, respond naturally without repeating previous questions."""
 
         try:
             from langchain_core.messages import HumanMessage, SystemMessage
@@ -380,7 +398,8 @@ Respond naturally and ask the next logical qualification question, or offer book
             import re as _re
             timeline_map = {
                 "today": "today", "tomorrow": "tomorrow", "asap": "asap", "soon": "soon",
-                "this week": "this_week", "next week": "next_week", "this month": "this_month", "next month": "next_month"
+                "this week": "this_week", "next week": "next_week", "this month": "this_month", "next month": "next_month",
+                "looking to see asap": "asap", "looking to sell asap": "asap", "as soon as possible": "asap"
             }
             for k, v in timeline_map.items():
                 if k in message_lower:
@@ -412,8 +431,12 @@ Respond naturally and ask the next logical qualification question, or offer book
 
             # Price expectation extraction
             price = None
-            m1 = _re.search(r"\$\s*([\d,]+(?:\.\d+)?)", message_lower)
-            m2 = _re.search(r"(\d+(?:\.\d+)?)\s*k\b", message_lower)  # e.g., 250k
+            # Match various price formats
+            m1 = _re.search(r"\$\s*([\d,]+(?:\.\d+)?)", message_lower)  # $1,000,000
+            m2 = _re.search(r"(\d+(?:\.\d+)?)\s*k\b", message_lower)  # 250k
+            m3 = _re.search(r"(\d+(?:\.\d+)?)\s*million", message_lower)  # 1 million
+            m4 = _re.search(r"(\d+(?:,\d{3})*)\s*(?:dollars?)?", message_lower)  # 1000000 or 1,000,000
+            
             if m1:
                 price = m1.group(1).replace(",", "")
             elif m2:
@@ -421,6 +444,14 @@ Respond naturally and ask the next logical qualification question, or offer book
                     price = str(int(float(m2.group(1)) * 1000))
                 except Exception:
                     price = None
+            elif m3:
+                try:
+                    price = str(int(float(m3.group(1)) * 1000000))
+                except Exception:
+                    price = None
+            elif m4 and len(m4.group(1).replace(",", "")) >= 5:  # At least 5 digits for price
+                price = m4.group(1).replace(",", "")
+            
             if price and not qualification_data.get("price_expectation"):
                 qualification_data["price_expectation"] = price
                 
