@@ -257,12 +257,8 @@ class SMSAgent(BaseRealEstateAgent):
             if missing:
                 state["conversation_stage"] = "qualifying"
             else:
-                # All key details captured; allow booking on any booking intent
-                booking_keywords = ["call", "schedule", "appointment", "meeting", "yes", "interested", "book"]
-                if any(keyword in message.lower() for keyword in booking_keywords):
-                    state["conversation_stage"] = "booking"
-                else:
-                    state["conversation_stage"] = "qualifying"
+                # All key details captured; advance to booking
+                state["conversation_stage"] = "booking"
     
     def _generate_conversation_response(self, state: RealEstateAgentState, incoming_message: str) -> str:
         """
@@ -298,8 +294,9 @@ class SMSAgent(BaseRealEstateAgent):
         print(f"🔍 Smart template: Current data: {qualification_data}")
         
         if not missing_fields:
-            # All fields collected, offer booking
-            return f"Perfect, {lead_name}! I'll send you a Google Meet invite. What works better — later today, tomorrow morning, or another time this week? Reply STOP to opt out."
+            # All fields collected — move into targeted booking flow (no repeats)
+            print(f"📅 Booking: switching to follow-up. Incoming='{incoming_message}'")
+            return self._generate_booking_followup(state, incoming_message)
         
         # Ask for the next missing field
         next_field = missing_fields[0]
@@ -319,6 +316,52 @@ class SMSAgent(BaseRealEstateAgent):
         else:
             # Fallback to generic template
             return self._generate_sms_message(state)
+
+    def _generate_booking_followup(self, state: RealEstateAgentState, incoming_message: str) -> str:
+        """Generate short booking follow-up based on user's last message without repeating the same prompt."""
+        lead_name = state.get("lead_name", "there")
+        text = incoming_message or ""
+        msg = text.lower().strip()
+        import re as _re
+        # Email detection
+        email_match = _re.search(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b", text)
+        # Time detection (12h and 24h)
+        time_12h = _re.search(r"\b(1[0-2]|0?[1-9])(:[0-5][0-9])?\s*(am|pm)\b", msg)
+        time_24h = _re.search(r"\b([01]?\d|2[0-3]):[0-5]\d\b", msg)
+        # Day/part detection
+        opts = {
+            "today": "today",
+            "tomorrow": "tomorrow",
+            "morning": "morning",
+            "afternoon": "afternoon",
+            "evening": "evening",
+            "this week": "this week",
+            "next week": "next week",
+        }
+        day_part = None
+        for k, v in opts.items():
+            if k in msg:
+                day_part = v
+                break
+        print(f"📅 Booking parse: email={bool(email_match)}, t12={bool(time_12h)}, t24={bool(time_24h)}, part={day_part}")
+        
+        # If we have an email and a specific time, confirm and close
+        if email_match and (time_12h or time_24h or day_part):
+            t = (time_12h.group(0) if time_12h else time_24h.group(0)) if (time_12h or time_24h) else day_part
+            email = email_match.group(0)
+            return f"Great! I’ll send a Google Meet invite for {t} to {email}."
+        # If only time provided, ask for email
+        if time_12h or time_24h:
+            t = time_12h.group(0) if time_12h else time_24h.group(0)
+            return f"Perfect — {t} works. What email should I send the Google Meet invite to?"
+        # If only day/part provided, ask for email
+        if day_part:
+            return f"Got it! {day_part} works. What email should I send the Meet invite to?"
+        # If they replied 'yes', propose two choices
+        if msg in ["yes", "yeah", "yep", "sure", "ok", "okay"]:
+            return "Great! Would tomorrow morning or afternoon work better for a 10–15 min Meet?"
+        # Default short ask without repeating
+        return "Sounds good. When works for a 10–15 min Google Meet? (e.g., tomorrow 2pm)."
 
     def _generate_llm_conversation_response(self, state: RealEstateAgentState, incoming_message: str) -> str:
         """Generate response using LLM with comprehensive system prompt and conversation history"""
