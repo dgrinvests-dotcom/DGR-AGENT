@@ -268,13 +268,62 @@ class SMSAgent(BaseRealEstateAgent):
         """
         Generate conversation response using LLM with system prompt for better conversational flow
         """
+        # Always extract qualification data first
+        self._extract_qualification_data(state, incoming_message)
+        self._llm_enhance_qualification_data(state, incoming_message)
+        
         # Use LLM-first approach if available, fallback to rule-based
         if self.openai_available and self.llm:
-            return self._generate_llm_conversation_response(state, incoming_message)
+            try:
+                return self._generate_llm_conversation_response(state, incoming_message)
+            except Exception as e:
+                print(f"⚠️ LLM failed, using rule-based fallback: {e}")
+                return self._generate_smart_template_response(state, incoming_message)
         else:
             # Fallback to rule-based extraction + templates
-            self._extract_qualification_data(state, incoming_message)
-            self._llm_enhance_qualification_data(state, incoming_message)
+            return self._generate_smart_template_response(state, incoming_message)
+    
+    def _generate_smart_template_response(self, state: RealEstateAgentState, incoming_message: str) -> str:
+        """Generate response using templates but with smart logic to avoid repeating questions"""
+        prop_type = state.get("property_type", "fix_flip")
+        qualification_data = state.get("qualification_data", {})
+        lead_name = state.get("lead_name", "there")
+        
+        # Check what we still need for this property type
+        if prop_type == "fix_flip":
+            required_fields = ["occupancy_status", "condition", "repairs_needed", "timeline", "access", "price_expectation"]
+        elif prop_type == "vacant_land":
+            required_fields = ["acreage", "road_access", "utilities", "price_expectation"]
+        else:  # long_term_rental
+            required_fields = ["rental_status", "condition", "timeline", "access", "price_expectation"]
+        
+        # Find the first missing field
+        missing_fields = [field for field in required_fields if not qualification_data.get(field)]
+        
+        print(f"🔍 Smart template: Missing fields: {missing_fields}")
+        print(f"🔍 Smart template: Current data: {qualification_data}")
+        
+        if not missing_fields:
+            # All fields collected, offer booking
+            return f"Perfect, {lead_name}! I'll send you a Google Meet invite. What works better — later today, tomorrow morning, or another time this week? Reply STOP to opt out."
+        
+        # Ask for the next missing field
+        next_field = missing_fields[0]
+        
+        if next_field == "occupancy_status":
+            return "Great! Is the property currently vacant, rented, or owner-occupied? Reply STOP to opt out."
+        elif next_field == "condition":
+            return "Perfect! How's the condition? Is it in good shape or does it need work? Reply STOP to opt out."
+        elif next_field == "repairs_needed":
+            return "Got it! Any recent repairs or major issues we should know about? Reply STOP to opt out."
+        elif next_field == "timeline":
+            return "Thanks! What's your timeline for selling — this week, next month, or a specific timeframe? Reply STOP to opt out."
+        elif next_field == "access":
+            return "Understood. Would we be able to get access for a quick walkthrough if needed? Reply STOP to opt out."
+        elif next_field == "price_expectation":
+            return "Got it. Do you have a price in mind or ballpark range you'd consider? Reply STOP to opt out."
+        else:
+            # Fallback to generic template
             return self._generate_sms_message(state)
 
     def _generate_llm_conversation_response(self, state: RealEstateAgentState, incoming_message: str) -> str:
@@ -286,15 +335,22 @@ class SMSAgent(BaseRealEstateAgent):
         # Build conversation history for context
         conversation_history = ""
         messages = state.get("messages", [])
+        print(f"🔍 Debug: Found {len(messages)} messages in state")
+        
         if messages:
             recent_messages = messages[-10:]  # Last 10 messages for context
-            for msg in recent_messages:
+            for i, msg in enumerate(recent_messages):
                 content = getattr(msg, 'content', str(msg))
                 msg_type = type(msg).__name__
+                print(f"🔍 Debug: Message {i}: {msg_type} - {content[:50]}...")
+                
                 if 'Human' in msg_type or 'User' in msg_type:
                     conversation_history += f"Lead: {content}\n"
                 elif 'AI' in msg_type or 'Assistant' in msg_type:
                     conversation_history += f"Agent: {content}\n"
+        
+        print(f"🔍 Debug: Built conversation history:\n{conversation_history}")
+        print(f"🔍 Debug: Current qualification data: {qualification_data}")
         
         # Build system prompt with conversation context
         system_prompt = f"""You are a professional real estate wholesaler having an SMS conversation with {lead_name} about their {prop_type.replace('_', ' ')} property.
