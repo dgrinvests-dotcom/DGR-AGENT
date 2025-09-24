@@ -219,13 +219,17 @@ class SMSAgent(BaseRealEstateAgent):
                     "response_message": response_message,
                     "generated_response": response_message,
                     "next_agent": "END",
+                    "booking_context": state.get("booking_context", {}),
+                    "qualification_data": state.get("qualification_data", {}),
                     "state_updates": {
                         "messages": state["messages"],
                         "last_contact_method": "sms",
                         "last_contact_time": datetime.now().isoformat(),
                         # Keep current stage unless supervisor changes it
                         "conversation_stage": state.get("conversation_stage", "responding"),
-                        "generated_response": response_message
+                        "generated_response": response_message,
+                        "booking_context": state.get("booking_context", {}),
+                        "qualification_data": state.get("qualification_data", {}),
                     }
                 }
             else:
@@ -368,7 +372,7 @@ class SMSAgent(BaseRealEstateAgent):
             booking_ctx.update({"email": email, "confirmed_time": t})
             state["booking_context"] = booking_ctx
             print(f"📅 Booking confirm: time='{t}', email='{email}'")
-            return f"Great! I’ll send a Google Meet invite for {t} to {email}."
+            return f"Great! I’ll send a Google Meet invite for {t} to {email}. Reply STOP to opt out."
         # If only time provided, ask for email
         if time_12h or time_24h:
             t = time_12h.group(0) if time_12h else time_24h.group(0)
@@ -377,17 +381,17 @@ class SMSAgent(BaseRealEstateAgent):
             booking_ctx["pending_time"] = t_label
             state["booking_context"] = booking_ctx
             print(f"📅 Booking pending time set: '{t_label}'")
-            return f"Perfect — {t} works. What email should I send the Google Meet invite to?"
+            return f"Perfect — {t_label} works. What email should I send the Google Meet invite to? Reply STOP to opt out."
         # If only day/part provided, ask for email
         if day_part or weekday:
             t_label = day_part or weekday
             booking_ctx["pending_time"] = t_label
             state["booking_context"] = booking_ctx
             print(f"📅 Booking pending time set: '{t_label}'")
-            return f"Got it! {t_label} works. What email should I send the Meet invite to?"
+            return f"Got it! {t_label} works. What email should I send the Meet invite to? Reply STOP to opt out."
         # If they replied 'yes', propose two choices
         if msg in ["yes", "yeah", "yep", "sure", "ok", "okay"]:
-            return "Great! Would tomorrow morning or afternoon work better for a 10–15 min Meet?"
+            return "Great! Would tomorrow morning or afternoon work better for a 10–15 min Meet? Reply STOP to opt out."
         # Default short ask without repeating
         # If we already have a pending time in context and they sent just an email without detection regex
         if email_match and booking_ctx.get("pending_time"):
@@ -396,8 +400,33 @@ class SMSAgent(BaseRealEstateAgent):
             booking_ctx.update({"email": email, "confirmed_time": t})
             state["booking_context"] = booking_ctx
             print(f"📅 Booking confirm (ctx): time='{t}', email='{email}'")
-            return f"Great! I’ll send a Google Meet invite for {t} to {email}."
-        return "Sounds good. When works for a 10–15 min Google Meet? (e.g., tomorrow 2pm)."
+            return f"Great! I’ll send a Google Meet invite for {t} to {email}. Reply STOP to opt out."
+
+        # New fallback: if they sent only an email but we lack a pending_time, infer from last AI message
+        if email_match:
+            messages = state.get("messages", []) or []
+            inferred = None
+            for m in reversed(messages):
+                if "AIMessage" in type(m).__name__:
+                    content = (getattr(m, "content", "") or "").lower()
+                    m12 = _re.search(r"\b(1[0-2]|0?[1-9])(:[0-5][0-9])?\s*(am|pm)\b", content)
+                    m24 = _re.search(r"\b([01]?\d|2[0-3]):[0-5]\d\b", content)
+                    # look for weekday or parts
+                    parts = ["morning", "afternoon", "evening", "today", "tomorrow", "this week", "next week",
+                             "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+                             "mon", "tue", "tues", "wed", "thu", "thur", "thurs", "fri", "sat", "sun"]
+                    found_part = next((p for p in parts if p in content), None)
+                    if m12 or m24 or found_part:
+                        inferred = (m12.group(0) if m12 else (m24.group(0) if m24 else found_part))
+                        break
+            if inferred:
+                email = email_match.group(0)
+                booking_ctx.update({"email": email, "confirmed_time": inferred})
+                state["booking_context"] = booking_ctx
+                print(f"📅 Booking confirm (infer): time='{inferred}', email='{email}'")
+                return f"Great! I’ll send a Google Meet invite for {inferred} to {email}. Reply STOP to opt out."
+
+        return "Sounds good. When works for a 10–15 min Google Meet? (e.g., tomorrow 2pm). Reply STOP to opt out."
 
     def _generate_llm_conversation_response(self, state: RealEstateAgentState, incoming_message: str) -> str:
         """Generate response using LLM with comprehensive system prompt and conversation history"""
