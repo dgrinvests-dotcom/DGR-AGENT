@@ -126,6 +126,22 @@ async def simulate_chat(req: SimulateChatRequest):
                     state["qualification_data"] = _json.loads(persisted_q)
             except Exception:
                 pass
+            # Load persisted messages if available
+            try:
+                persisted_msgs = lead_row.get("conversation_messages")
+                if persisted_msgs:
+                    msgs_list = json.loads(persisted_msgs)
+                    from langchain_core.messages import HumanMessage as _HM, AIMessage as _AM
+                    state["messages"] = []
+                    for m in msgs_list:
+                        role = (m.get("role") or "").lower()
+                        content = m.get("content", "")
+                        if role == "human":
+                            state["messages"].append(_HM(content=content))
+                        elif role == "ai":
+                            state["messages"].append(_AM(content=content))
+            except Exception:
+                pass
         else:
             # Create new lead for simulation
             lead_id = str(uuid.uuid4())
@@ -156,9 +172,12 @@ async def simulate_chat(req: SimulateChatRequest):
                 lead_phone=from_number,
             )
             state["conversation_stage"] = "qualifying"
+            state["messages"] = []
 
-        # Add inbound message
-        state["messages"] = [HumanMessage(content=message)]
+        # Add inbound message (append, do not overwrite)
+        if "messages" not in state or not isinstance(state["messages"], list):
+            state["messages"] = []
+        state["messages"].append(HumanMessage(content=message))
         state["conversation_mode"] = "inbound_response"
         state["incoming_message"] = message
         state["sms_simulation"] = True
@@ -169,15 +188,26 @@ async def simulate_chat(req: SimulateChatRequest):
 
         # Persist continuity fields
         try:
+            # Serialize messages for persistence
+            msgs_to_save = result.get("messages", state.get("messages", [])) or []
+            serialized_msgs = []
+            for m in msgs_to_save:
+                c = getattr(m, "content", None)
+                if not isinstance(c, str):
+                    c = str(c)
+                role = "ai" if "AIMessage" in type(m).__name__ else "human"
+                serialized_msgs.append({"role": role, "content": c})
+
             conn.execute(
                 """
                 UPDATE leads
-                SET conversation_stage = ?, qualification_data = ?, status = 'responding'
+                SET conversation_stage = ?, qualification_data = ?, status = 'responding', conversation_messages = ?
                 WHERE phone = ?
                 """,
                 (
                     result.get("conversation_stage", state.get("conversation_stage", "qualifying")),
                     json.dumps(result.get("qualification_data", state.get("qualification_data", {}))),
+                    json.dumps(serialized_msgs),
                     from_number,
                 ),
             )
@@ -374,6 +404,10 @@ class Database:
             pass
         try:
             cursor.execute("ALTER TABLE leads ADD COLUMN qualification_data TEXT")
+        except Exception:
+            pass
+        try:
+            cursor.execute("ALTER TABLE leads ADD COLUMN conversation_messages TEXT")
         except Exception:
             pass
         

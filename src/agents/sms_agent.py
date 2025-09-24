@@ -268,20 +268,14 @@ class SMSAgent(BaseRealEstateAgent):
         """
         Generate conversation response using LLM with system prompt for better conversational flow
         """
-        # Always extract qualification data first
+        # Always extract qualification data first (rule-based + LLM-assisted)
         self._extract_qualification_data(state, incoming_message)
         self._llm_enhance_qualification_data(state, incoming_message)
-        
-        # Use LLM-first approach if available, fallback to rule-based
-        if self.openai_available and self.llm:
-            try:
-                return self._generate_llm_conversation_response(state, incoming_message)
-            except Exception as e:
-                print(f"⚠️ LLM failed, using rule-based fallback: {e}")
-                return self._generate_smart_template_response(state, incoming_message)
-        else:
-            # Fallback to rule-based extraction + templates
-            return self._generate_smart_template_response(state, incoming_message)
+
+        # Deterministic response selection to prevent repeats
+        # We still use LLM for extraction above, but response selection is handled
+        # by a smart template that asks only for the next missing field.
+        return self._generate_smart_template_response(state, incoming_message)
     
     def _generate_smart_template_response(self, state: RealEstateAgentState, incoming_message: str) -> str:
         """Generate response using templates but with smart logic to avoid repeating questions"""
@@ -469,11 +463,12 @@ Based on the conversation history and current qualification status, respond natu
                     unit = m.group(3)
                     qualification_data["timeline"] = f"{qty}_{unit}"
 
-            # Access extraction - broader patterns
+            # Access extraction - broader patterns (avoid generic 'access' token)
             positive_access = [
-                "can show", "show you", "access", "keys", "available to show", 
-                "we can coordinate", "can view", "yes", "sure", "ok", "we can",
-                "able to", "possible", "arrange", "coordinate"
+                "can show", "show you", "available to show", "can view",
+                "have keys", "got keys", "we have keys",
+                "yes", "yeah", "yep", "sure", "ok", "okay", "absolutely", "of course",
+                "we can", "we are able", "able to", "possible", "arrange", "coordinate"
             ]
             negative_access = [
                 "no access", "can't access", "cannot access", "tenant won't", 
