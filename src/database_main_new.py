@@ -126,6 +126,13 @@ async def simulate_chat(req: SimulateChatRequest):
                     state["qualification_data"] = _json.loads(persisted_q)
             except Exception:
                 pass
+            # Load persisted booking context
+            try:
+                persisted_bc = lead_row.get("booking_context")
+                if persisted_bc:
+                    state["booking_context"] = json.loads(persisted_bc)
+            except Exception:
+                pass
             # Load persisted messages if available
             try:
                 persisted_msgs = lead_row.get("conversation_messages")
@@ -201,13 +208,14 @@ async def simulate_chat(req: SimulateChatRequest):
             conn.execute(
                 """
                 UPDATE leads
-                SET conversation_stage = ?, qualification_data = ?, status = 'responding', conversation_messages = ?
+                SET conversation_stage = ?, qualification_data = ?, status = 'responding', conversation_messages = ?, booking_context = ?
                 WHERE phone = ?
                 """,
                 (
                     result.get("conversation_stage", state.get("conversation_stage", "qualifying")),
                     json.dumps(result.get("qualification_data", state.get("qualification_data", {}))),
                     json.dumps(serialized_msgs),
+                    json.dumps(result.get("booking_context", state.get("booking_context", {}))),
                     from_number,
                 ),
             )
@@ -408,6 +416,10 @@ class Database:
             pass
         try:
             cursor.execute("ALTER TABLE leads ADD COLUMN conversation_messages TEXT")
+        except Exception:
+            pass
+        try:
+            cursor.execute("ALTER TABLE leads ADD COLUMN booking_context TEXT")
         except Exception:
             pass
         

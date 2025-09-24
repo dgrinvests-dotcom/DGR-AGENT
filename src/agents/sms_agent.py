@@ -322,6 +322,7 @@ class SMSAgent(BaseRealEstateAgent):
         lead_name = state.get("lead_name", "there")
         text = incoming_message or ""
         msg = text.lower().strip()
+        booking_ctx = state.get("booking_context", {}) or {}
         import re as _re
         # Email detection
         email_match = _re.search(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b", text)
@@ -338,29 +339,64 @@ class SMSAgent(BaseRealEstateAgent):
             "this week": "this week",
             "next week": "next week",
         }
+        weekdays = [
+            "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+            "mon", "tue", "tues", "wed", "thu", "thur", "thurs", "fri", "sat", "sun"
+        ]
         day_part = None
+        weekday = None
         for k, v in opts.items():
             if k in msg:
                 day_part = v
                 break
-        print(f"📅 Booking parse: email={bool(email_match)}, t12={bool(time_12h)}, t24={bool(time_24h)}, part={day_part}")
+        if not day_part:
+            for wd in weekdays:
+                if wd in msg:
+                    weekday = wd
+                    break
+        print(f"📅 Booking parse: email={bool(email_match)}, t12={bool(time_12h)}, t24={bool(time_24h)}, part={day_part}, weekday={weekday}")
         
         # If we have an email and a specific time, confirm and close
-        if email_match and (time_12h or time_24h or day_part):
-            t = (time_12h.group(0) if time_12h else time_24h.group(0)) if (time_12h or time_24h) else day_part
+        if email_match and (time_12h or time_24h or day_part or weekday or booking_ctx.get("pending_time")):
+            if booking_ctx.get("pending_time") and not (time_12h or time_24h or day_part or weekday):
+                t = booking_ctx.get("pending_time")
+            else:
+                t_base = (time_12h.group(0) if time_12h else time_24h.group(0)) if (time_12h or time_24h) else (day_part or weekday or "")
+                t = t_base
             email = email_match.group(0)
+            # Persist confirmed details
+            booking_ctx.update({"email": email, "confirmed_time": t})
+            state["booking_context"] = booking_ctx
+            print(f"📅 Booking confirm: time='{t}', email='{email}'")
             return f"Great! I’ll send a Google Meet invite for {t} to {email}."
         # If only time provided, ask for email
         if time_12h or time_24h:
             t = time_12h.group(0) if time_12h else time_24h.group(0)
+            # Remember pending time in context, including weekday prefix if present
+            t_label = f"{weekday} {t}".strip() if weekday else t
+            booking_ctx["pending_time"] = t_label
+            state["booking_context"] = booking_ctx
+            print(f"📅 Booking pending time set: '{t_label}'")
             return f"Perfect — {t} works. What email should I send the Google Meet invite to?"
         # If only day/part provided, ask for email
-        if day_part:
-            return f"Got it! {day_part} works. What email should I send the Meet invite to?"
+        if day_part or weekday:
+            t_label = day_part or weekday
+            booking_ctx["pending_time"] = t_label
+            state["booking_context"] = booking_ctx
+            print(f"📅 Booking pending time set: '{t_label}'")
+            return f"Got it! {t_label} works. What email should I send the Meet invite to?"
         # If they replied 'yes', propose two choices
         if msg in ["yes", "yeah", "yep", "sure", "ok", "okay"]:
             return "Great! Would tomorrow morning or afternoon work better for a 10–15 min Meet?"
         # Default short ask without repeating
+        # If we already have a pending time in context and they sent just an email without detection regex
+        if email_match and booking_ctx.get("pending_time"):
+            t = booking_ctx.get("pending_time")
+            email = email_match.group(0)
+            booking_ctx.update({"email": email, "confirmed_time": t})
+            state["booking_context"] = booking_ctx
+            print(f"📅 Booking confirm (ctx): time='{t}', email='{email}'")
+            return f"Great! I’ll send a Google Meet invite for {t} to {email}."
         return "Sounds good. When works for a 10–15 min Google Meet? (e.g., tomorrow 2pm)."
 
     def _generate_llm_conversation_response(self, state: RealEstateAgentState, incoming_message: str) -> str:
