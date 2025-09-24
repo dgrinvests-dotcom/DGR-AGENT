@@ -186,13 +186,12 @@ class SMSAgent(BaseRealEstateAgent):
                 print("❌ SMS service not available")
                 return {"success": False, "error": "SMS service not available"}
             
-            print(f"📤 Sending SMS to {formatted_phone}: {response_message}")
-            
             # Send or simulate SMS response
             if effective_sim:
                 print(f"🧪 Simulation: would send SMS to {formatted_phone}: {response_message}")
                 send_result = {"success": True, "message_id": "simulated", "status": "simulated"}
             else:
+                print(f"📤 Sending SMS to {formatted_phone}: {response_message}")
                 send_result = self.sms_service.send_sms(
                     to_number=formatted_phone,
                     message=response_message,
@@ -218,12 +217,14 @@ class SMSAgent(BaseRealEstateAgent):
                     "action": "conversation_response_sent",
                     "message_id": send_result["message_id"],
                     "response_message": response_message,
+                    "generated_response": response_message,
                     "next_agent": "END",
                     "state_updates": {
                         "messages": state["messages"],
                         "last_contact_method": "sms",
                         "last_contact_time": datetime.now().isoformat(),
-                        "conversation_stage": "responding"
+                        "conversation_stage": "responding",
+                        "generated_response": response_message
                     }
                 }
             else:
@@ -255,6 +256,8 @@ class SMSAgent(BaseRealEstateAgent):
         """
         # Update qualification data based on incoming message
         self._extract_qualification_data(state, incoming_message)
+        # Cost-aware LLM enhancement only if fields still missing
+        self._llm_enhance_qualification_data(state, incoming_message)
         
         # Use existing message generation logic
         return self._generate_sms_message(state)
@@ -276,9 +279,15 @@ class SMSAgent(BaseRealEstateAgent):
                 qualification_data["occupancy_status"] = "owner_occupied"
             
             # Condition / repairs extraction
-            good_markers = ["good", "great", "excellent", "fine", "ok", "okay", "no issues", "no problem"]
+            good_markers = [
+                "good", "great", "excellent", "fine", "ok", "okay",
+                "no issues", "no issue", "no problem", "no problems", "nothing major", "no major issue", "no major issues"
+            ]
             needs_work_markers = ["needs work", "needs repairs", "repairs", "major issues", "bad", "poor", "fixer", "fixer-upper", "rough"]
-            no_repairs_markers = ["no repairs", "none", "nothing", "no work", "no major issues"]
+            no_repairs_markers = [
+                "no repairs", "none", "nothing", "no work", "no major issues", "no major issue",
+                "no issues", "no issue", "nothing major"
+            ]
             some_repairs_markers = ["some repairs", "minor repairs", "few repairs", "a few issues", "needs some work"]
             
             if any(k in message_lower for k in good_markers):
@@ -329,6 +338,82 @@ class SMSAgent(BaseRealEstateAgent):
             print(f"🔎 Qualification data updated: {state['qualification_data']}")
         except Exception:
             pass
+
+    def _llm_enhance_qualification_data(self, state: RealEstateAgentState, message: str):
+        """Use LLM to extract structured qualification data when needed (cost-aware)."""
+        # Gate behind env flag to control costs
+        use_llm = str(os.getenv("LLM_EXTRACTION", "1")).lower() in ["1", "true", "yes"]
+        if not use_llm or not getattr(self, "openai_available", False) or not self.llm:
+            return
+
+        prop = state.get("property_type", "fix_flip")
+        q = state.get("qualification_data", {}) or {}
+
+        # Determine missing keys per property type
+        if prop == "fix_flip":
+            needed = [k for k in ["occupancy_status", "condition", "repairs_needed"] if not q.get(k)]
+        elif prop == "vacant_land":
+            needed = [k for k in ["acreage", "road_access", "utilities"] if not q.get(k)]
+        else:  # long_term_rental
+            needed = [k for k in ["rental_status", "condition"] if not q.get(k)]
+
+        if not needed:
+            return  # Nothing to improve
+
+        schema_desc = {
+            "fix_flip": {
+                "occupancy_status": "one of: vacant, rented, owner_occupied, unknown",
+                "condition": "one of: good, needs_work, unknown",
+                "repairs_needed": "one of: none, minor, yes, unknown",
+            },
+            "vacant_land": {
+                "acreage": "number as string if present, else empty",
+                "road_access": "yes/no/unknown",
+                "utilities": "nearby/not_nearby/unknown",
+            },
+            "long_term_rental": {
+                "rental_status": "rented/vacant/unknown",
+                "condition": "good/needs_work/unknown",
+            },
+        }
+
+        prompt = f"""
+You are extracting structured data from a seller SMS about a {prop.replace('_', ' ')} property.
+Return STRICT JSON with only the relevant keys for {prop} as per schema and use lower_snake_case values:
+Schema: {schema_desc.get(prop)}
+Rules:
+- If the message implies no repairs or nothing major, set repairs_needed: none.
+- Use 'unknown' if not explicitly stated.
+- Do not include any extra keys.
+
+Message: ```{message}```
+Respond with JSON only.
+"""
+        try:
+            from langchain_core.messages import HumanMessage
+            resp = self.llm.invoke([HumanMessage(content=prompt)])
+            raw = resp.content if hasattr(resp, "content") else str(resp)
+            import json as _json
+            # Try to locate JSON object
+            start = raw.find("{")
+            end = raw.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                parsed = _json.loads(raw[start : end + 1])
+            else:
+                parsed = _json.loads(raw)
+
+            # Merge parsed values (only fill missing)
+            q_updated = dict(q)
+            for k, v in parsed.items():
+                if k in q_updated and q_updated.get(k):
+                    continue
+                if v in (None, "", "unknown"):
+                    continue
+                q_updated[k] = v
+            state["qualification_data"] = q_updated
+            print(f"🧠 LLM-enhanced qualification: {q_updated}")
+        except Exception as _e:
+            print(f"⚠️ LLM extraction failed or returned invalid JSON: {_e}")
     
     def _generate_sms_message(self, state: RealEstateAgentState) -> str:
         """

@@ -185,8 +185,19 @@ async def simulate_chat(req: SimulateChatRequest):
         except Exception as _e:
             print(f"⚠️ Failed to persist conversation state (simulate): {_e}")
 
-        # Prepare response
-        response_text = result.get("generated_response") or ""
+        # Prepare response with fallbacks
+        response_text = result.get("generated_response") or result.get("response_message") or ""
+        if not response_text:
+            try:
+                msgs = result.get("messages", []) or []
+                # Find last AI-like message with content
+                for m in reversed(msgs):
+                    content = getattr(m, "content", None)
+                    if isinstance(content, str) and content.strip():
+                        response_text = content
+                        break
+            except Exception:
+                pass
         return {
             "success": True,
             "response": response_text,
@@ -216,11 +227,11 @@ async def simulate_ui():
         .card { background: #fff; border: 1px solid #eee; border-radius: 8px; padding: 16px; }
         .row { display: flex; gap: 8px; margin-bottom: 8px; }
         .row > * { flex: 1; }
-        .chat { border: 1px solid #eee; border-radius: 8px; padding: 12px; background: #fafafa; height: 320px; overflow-y: auto; }
-        .bubble { display:inline-block; padding:8px 12px; border-radius:12px; margin:6px 0; max-width:75%; white-space:pre-wrap; }
+        .chat { border: 1px solid #eee; border-radius: 8px; padding: 12px; background: #fafafa; height: 360px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+        .bubble { display:inline-block; padding:10px 12px; border-radius:12px; margin:2px 0; max-width:80%; white-space:pre-wrap; word-break: break-word; }
         .user { background:#1976d2; color:#fff; margin-left:auto; }
         .agent { background:#e0e0e0; color:#222; margin-right:auto; }
-        .state { font-family: monospace; font-size: 12px; white-space: pre; background: #f3f3f3; padding: 8px; border-radius: 6px; }
+        .state { font-family: monospace; font-size: 12px; white-space: pre-wrap; word-break: break-word; background: #f3f3f3; padding: 8px; border-radius: 6px; }
         button { padding: 8px 12px; }
         input, select { padding: 8px; }
       </style>
