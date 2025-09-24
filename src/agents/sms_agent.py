@@ -210,7 +210,7 @@ class SMSAgent(BaseRealEstateAgent):
                 # Update state
                 state["last_contact_method"] = "sms"
                 state["last_contact_time"] = datetime.now().isoformat()
-                state["conversation_stage"] = "responding"
+                # Preserve stage (don't forcibly overwrite booking/qualifying)
                 
                 return {
                     "success": True,
@@ -223,7 +223,8 @@ class SMSAgent(BaseRealEstateAgent):
                         "messages": state["messages"],
                         "last_contact_method": "sms",
                         "last_contact_time": datetime.now().isoformat(),
-                        "conversation_stage": "responding",
+                        # Keep current stage unless supervisor changes it
+                        "conversation_stage": state.get("conversation_stage", "responding"),
                         "generated_response": response_message
                     }
                 }
@@ -242,12 +243,26 @@ class SMSAgent(BaseRealEstateAgent):
         if current_stage == "initial":
             state["conversation_stage"] = "qualifying"
         elif current_stage == "qualifying":
-            # Check if ready for booking
-            booking_keywords = ["call", "schedule", "appointment", "meeting", "yes", "interested"]
-            if any(keyword in message.lower() for keyword in booking_keywords):
-                state["conversation_stage"] = "booking"
+            # Stay in qualifying until we have all required fields
+            q = state.get("qualification_data", {}) or {}
+            prop = state.get("property_type", "fix_flip")
+            if prop == "fix_flip":
+                required = ["occupancy_status", "condition", "repairs_needed", "timeline", "access", "price_expectation"]
+            elif prop == "vacant_land":
+                required = ["acreage", "road_access", "utilities", "price_expectation"]
             else:
+                required = ["rental_status", "condition", "timeline", "access", "price_expectation"]
+
+            missing = [k for k in required if not q.get(k)]
+            if missing:
                 state["conversation_stage"] = "qualifying"
+            else:
+                # All key details captured; allow booking on any booking intent
+                booking_keywords = ["call", "schedule", "appointment", "meeting", "yes", "interested", "book"]
+                if any(keyword in message.lower() for keyword in booking_keywords):
+                    state["conversation_stage"] = "booking"
+                else:
+                    state["conversation_stage"] = "qualifying"
     
     def _generate_conversation_response(self, state: RealEstateAgentState, incoming_message: str) -> str:
         """
@@ -303,6 +318,44 @@ class SMSAgent(BaseRealEstateAgent):
                 qualification_data["repairs_needed"] = "minor"
             elif "repairs" in message_lower and "no" not in message_lower:
                 qualification_data["repairs_needed"] = "yes"
+
+            # Timeline extraction (simple keyword/regex)
+            import re as _re
+            timeline_map = {
+                "today": "today", "tomorrow": "tomorrow", "asap": "asap", "soon": "soon",
+                "this week": "this_week", "next week": "next_week", "this month": "this_month", "next month": "next_month"
+            }
+            for k, v in timeline_map.items():
+                if k in message_lower:
+                    qualification_data["timeline"] = v
+                    break
+            if not qualification_data.get("timeline"):
+                # numeric like "in 2 weeks", "2 months"
+                m = _re.search(r"(in\s*)?(\d+)\s*(day|days|week|weeks|month|months)", message_lower)
+                if m:
+                    qty = m.group(2)
+                    unit = m.group(3)
+                    qualification_data["timeline"] = f"{qty}_{unit}"
+
+            # Access extraction
+            if any(p in message_lower for p in ["can show", "show you", "access", "keys", "available to show", "we can coordinate", "can view"]):
+                qualification_data["access"] = "yes"
+            if any(p in message_lower for p in ["no access", "can't access", "cannot access", "tenant won't", "not available to show"]):
+                qualification_data["access"] = "no"
+
+            # Price expectation extraction
+            price = None
+            m1 = _re.search(r"\$\s*([\d,]+(?:\.\d+)?)", message_lower)
+            m2 = _re.search(r"(\d+(?:\.\d+)?)\s*k\b", message_lower)  # e.g., 250k
+            if m1:
+                price = m1.group(1).replace(",", "")
+            elif m2:
+                try:
+                    price = str(int(float(m2.group(1)) * 1000))
+                except Exception:
+                    price = None
+            if price and not qualification_data.get("price_expectation"):
+                qualification_data["price_expectation"] = price
                 
         elif property_type == "vacant_land":
             # Extract acreage
@@ -351,11 +404,16 @@ class SMSAgent(BaseRealEstateAgent):
 
         # Determine missing keys per property type
         if prop == "fix_flip":
-            needed = [k for k in ["occupancy_status", "condition", "repairs_needed"] if not q.get(k)]
+            needed = [
+                k for k in [
+                    "occupancy_status", "condition", "repairs_needed",
+                    "timeline", "access", "price_expectation"
+                ] if not q.get(k)
+            ]
         elif prop == "vacant_land":
-            needed = [k for k in ["acreage", "road_access", "utilities"] if not q.get(k)]
+            needed = [k for k in ["acreage", "road_access", "utilities", "price_expectation"] if not q.get(k)]
         else:  # long_term_rental
-            needed = [k for k in ["rental_status", "condition"] if not q.get(k)]
+            needed = [k for k in ["rental_status", "condition", "timeline", "access", "price_expectation"] if not q.get(k)]
 
         if not needed:
             return  # Nothing to improve
@@ -365,15 +423,22 @@ class SMSAgent(BaseRealEstateAgent):
                 "occupancy_status": "one of: vacant, rented, owner_occupied, unknown",
                 "condition": "one of: good, needs_work, unknown",
                 "repairs_needed": "one of: none, minor, yes, unknown",
+                "timeline": "values like today, tomorrow, asap, soon, this_week, next_week, this_month, next_month, N_days, N_weeks, N_months, or unknown",
+                "access": "yes/no/unknown",
+                "price_expectation": "numeric string without symbols if present, else unknown",
             },
             "vacant_land": {
                 "acreage": "number as string if present, else empty",
                 "road_access": "yes/no/unknown",
                 "utilities": "nearby/not_nearby/unknown",
+                "price_expectation": "numeric string without symbols if present, else unknown",
             },
             "long_term_rental": {
                 "rental_status": "rented/vacant/unknown",
                 "condition": "good/needs_work/unknown",
+                "timeline": "values like today, tomorrow, asap, soon, this_week, next_week, this_month, next_month, N_days, N_weeks, N_months, or unknown",
+                "access": "yes/no/unknown",
+                "price_expectation": "numeric string without symbols if present, else unknown",
             },
         }
 
@@ -472,10 +537,28 @@ Respond with JSON only.
                 return "Got it — and how's the overall condition? Reply STOP to opt out."
             if not qualification_data.get("repairs_needed"):
                 return "Any recent repairs or major issues we should know about? Reply STOP to opt out."
+            # Timeline
+            if not qualification_data.get("timeline"):
+                return (
+                    "Thanks! What's your ideal timeline for selling — this week, next week, or a specific timeframe? "
+                    "Reply STOP to opt out."
+                )
+            # Access
+            if not qualification_data.get("access"):
+                return (
+                    "Understood. Would we be able to get access for a quick walkthrough if needed (we can work around tenants)? "
+                    "Reply STOP to opt out."
+                )
+            # Price expectation
+            if not qualification_data.get("price_expectation"):
+                return (
+                    "Got it. Do you have a price in mind or a ballpark range you'd consider? "
+                    "Reply STOP to opt out."
+                )
             # Otherwise propose booking
             return (
-                "Thanks for the info! Based on what you shared, we may be able to make a fair cash offer. "
-                "Want to schedule a quick call to go over next steps? Reply STOP to opt out."
+                "Thanks for all the details! We can likely put together a fair cash offer. "
+                "Would you like to schedule a quick 10–15 minute call to review options? Reply STOP to opt out."
             )
         
         elif property_type == "vacant_land":
