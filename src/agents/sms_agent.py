@@ -266,16 +266,73 @@ class SMSAgent(BaseRealEstateAgent):
     
     def _generate_conversation_response(self, state: RealEstateAgentState, incoming_message: str) -> str:
         """
-        Generate conversation response based on current stage and incoming message
-        Uses existing SMS message generation logic
+        Generate conversation response using LLM with system prompt for better conversational flow
         """
-        # Update qualification data based on incoming message
-        self._extract_qualification_data(state, incoming_message)
-        # Cost-aware LLM enhancement only if fields still missing
-        self._llm_enhance_qualification_data(state, incoming_message)
+        # Use LLM-first approach if available, fallback to rule-based
+        if self.openai_available and self.llm:
+            return self._generate_llm_conversation_response(state, incoming_message)
+        else:
+            # Fallback to rule-based extraction + templates
+            self._extract_qualification_data(state, incoming_message)
+            self._llm_enhance_qualification_data(state, incoming_message)
+            return self._generate_sms_message(state)
+
+    def _generate_llm_conversation_response(self, state: RealEstateAgentState, incoming_message: str) -> str:
+        """Generate response using LLM with comprehensive system prompt"""
+        prop_type = state.get("property_type", "fix_flip")
+        lead_name = state.get("lead_name", "there")
+        qualification_data = state.get("qualification_data", {})
         
-        # Use existing message generation logic
-        return self._generate_sms_message(state)
+        # Build system prompt for conversational qualification
+        system_prompt = f"""You are a professional real estate wholesaler having an SMS conversation with {lead_name} about their {prop_type.replace('_', ' ')} property.
+
+CURRENT QUALIFICATION STATUS: {qualification_data}
+
+QUALIFICATION REQUIREMENTS for {prop_type}:
+- fix_flip: occupancy_status, condition, repairs_needed, timeline, access, price_expectation
+- vacant_land: acreage, road_access, utilities, price_expectation  
+- long_term_rental: rental_status, condition, timeline, access, price_expectation
+
+CONVERSATION RULES:
+1. Ask ONE question at a time, keep responses under 160 characters
+2. Be conversational and natural, not robotic
+3. Always end with "Reply STOP to opt out"
+4. Progress through qualification systematically
+5. When ALL required fields are collected, offer to schedule a call
+6. Parse their response and update qualification data mentally
+
+RESPONSE PATTERNS:
+- "yes", "sure", "ok", "we can" = positive for access/timeline questions
+- "no", "can't", "unable" = negative responses
+- Numbers with $ or k = price expectations
+- Time references = timeline (this week, next month, asap, etc.)
+- Condition words = good/needs work
+
+Their latest message: "{incoming_message}"
+
+Respond naturally and ask the next logical qualification question, or offer booking if complete."""
+
+        try:
+            from langchain_core.messages import HumanMessage, SystemMessage
+            messages = [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=f"Lead says: {incoming_message}")
+            ]
+            
+            response = self.llm.invoke(messages)
+            generated_response = response.content if hasattr(response, 'content') else str(response)
+            
+            # Also extract qualification data from the message
+            self._extract_qualification_data(state, incoming_message)
+            self._llm_enhance_qualification_data(state, incoming_message)
+            
+            return generated_response
+            
+        except Exception as e:
+            print(f"⚠️ LLM conversation generation failed: {e}")
+            # Fallback to template-based
+            self._extract_qualification_data(state, incoming_message)
+            return self._generate_sms_message(state)
     
     def _extract_qualification_data(self, state: RealEstateAgentState, message: str):
         """Extract qualification data from incoming message"""
@@ -337,10 +394,20 @@ class SMSAgent(BaseRealEstateAgent):
                     unit = m.group(3)
                     qualification_data["timeline"] = f"{qty}_{unit}"
 
-            # Access extraction
-            if any(p in message_lower for p in ["can show", "show you", "access", "keys", "available to show", "we can coordinate", "can view"]):
+            # Access extraction - broader patterns
+            positive_access = [
+                "can show", "show you", "access", "keys", "available to show", 
+                "we can coordinate", "can view", "yes", "sure", "ok", "we can",
+                "able to", "possible", "arrange", "coordinate"
+            ]
+            negative_access = [
+                "no access", "can't access", "cannot access", "tenant won't", 
+                "not available to show", "no", "can't", "cannot", "unable"
+            ]
+            
+            if any(p in message_lower for p in positive_access):
                 qualification_data["access"] = "yes"
-            if any(p in message_lower for p in ["no access", "can't access", "cannot access", "tenant won't", "not available to show"]):
+            elif any(p in message_lower for p in negative_access):
                 qualification_data["access"] = "no"
 
             # Price expectation extraction
@@ -494,6 +561,8 @@ Respond with JSON only.
             return self._get_initial_sms_message(property_type, lead_name, property_address)
         elif stage == "qualifying" or stage == "responding":
             return self._get_qualifying_sms_message(property_type, state)
+        elif stage == "booking":
+            return self._get_booking_sms_message(state)
         elif stage == "follow_up":
             return self._get_follow_up_sms_message(property_type, state)
         else:
@@ -595,6 +664,20 @@ Respond with JSON only.
             return f"Still open to selling {property_address}? We make fair cash offers and cover closing costs. Let me know if you'd like to chat or want the offer sent over. Reply STOP to opt out."
         else:
             return f"Hi {lead_name}, this is my final follow-up about {property_address}. If you're ever interested in a cash offer, feel free to reach out. Thanks! Reply STOP to opt out."
+
+    def _get_booking_sms_message(self, state: RealEstateAgentState) -> str:
+        """Get booking-stage SMS message with optional Calendly link."""
+        lead_name = state.get("lead_name", "there")
+        calendly = os.getenv("CALENDLY_LINK", "").strip()
+        if calendly:
+            return (
+                f"Great, {lead_name}! Here’s my scheduling link: {calendly} — feel free to pick a 10–15 minute time that works. "
+                "If you don’t see a good slot, tell me a couple windows and I’ll send an invite. Reply STOP to opt out."
+            )
+        return (
+            "Great! What works better for a quick 10–15 minute call — later today or tomorrow morning? "
+            "Or share a time window and I’ll send a calendar invite. Reply STOP to opt out."
+        )
     
     def _check_sms_compliance(self, state: RealEstateAgentState, phone_number: str) -> Dict[str, Any]:
         """
