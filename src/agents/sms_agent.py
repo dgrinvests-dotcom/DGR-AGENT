@@ -369,6 +369,38 @@ class SMSAgent(BaseRealEstateAgent):
                         print("📅 Booking ack: prior invite promise detected; acknowledging without re-asking")
                         return "All set! You’ll receive the Google Meet invite shortly. Reply STOP to opt out."
                     break
+        
+        # If they said it works without repeating time (e.g., "works for me", "that works"), infer from last AI suggestion
+        if any(p in msg for p in ["works for me", "that works", "works", "sounds good", "let's do it", "lets do it", "sure"]):
+            # Try to infer time from previous AI suggestion
+            messages = state.get("messages", []) or []
+            inferred = None
+            for m in reversed(messages):
+                if "AIMessage" in type(m).__name__:
+                    content = (getattr(m, "content", "") or "").lower()
+                    m12 = _re.search(r"\b(1[0-2]|0?[1-9])(:[0-5][0-9])?\s*(am|pm)\b", content)
+                    m24 = _re.search(r"\b([01]?\d|2[0-3]):[0-5]\d\b", content)
+                    parts = ["morning", "afternoon", "evening", "today", "tomorrow", "this week", "next week",
+                             "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+                             "mon", "tue", "tues", "wed", "thu", "thur", "thurs", "fri", "sat", "sun"]
+                    found_part = next((p for p in parts if p in content), None)
+                    if m12 or m24 or found_part:
+                        inferred = (m12.group(0) if m12 else (m24.group(0) if m24 else found_part))
+                        break
+            if inferred:
+                email_known = booking_ctx.get("email") or state.get("lead_email")
+                if email_known:
+                    booking_ctx.update({"confirmed_time": inferred, "email": email_known})
+                    state["booking_context"] = booking_ctx
+                    state["lead_email"] = email_known
+                    state["conversation_stage"] = "scheduled"
+                    state["next_action"] = "schedule_appointment"
+                    print(f"📅 Booking confirm (works): time='{inferred}', email='{email_known}'")
+                    return f"Great! I’ll send a Google Meet invite for {inferred} to {email_known}. Reply STOP to opt out."
+                else:
+                    booking_ctx["pending_time"] = inferred
+                    state["booking_context"] = booking_ctx
+                    return f"Perfect — {inferred} works. Are you okay with a quick Google Meet for 10–15 min? If so, what email should I send the invite to? Reply STOP to opt out."
         # Email detection
         email_match = _re.search(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b", text)
         # Time detection (12h and 24h)
@@ -580,7 +612,10 @@ CRITICAL RULES:
 3. Ask ONE new question at a time; keep messages under 160 characters.
 4. Be conversational, friendly, and natural. Avoid robotic phrasing.
 5. Always end with "Reply STOP to opt out".
-6. When ALL required fields are collected, move to booking gracefully:
+6. When ALL required fields are collected, move to booking with a virtual Google Meet (not an in-person showing) unless the lead explicitly asks for in-person:
+   - First confirm they’re okay with a quick 10–15 min Google Meet.
+   - After they agree to Google Meet, then ask for their email if you don’t already have it.
+   - Use phrasing like "Google Meet" or "video call"; do NOT offer or imply an in-person showing by default.
    - If ONLY time is provided, politely ask for email.
    - If ONLY email is provided and a time is pending/was proposed, confirm using that time.
    - If time AND email are present (or time is pending and email arrives), reply with ONE friendly confirmation and do NOT ask for time again.
