@@ -224,11 +224,15 @@ async def simulate_chat(req: SimulateChatRequest):
         except Exception as _e:
             print(f"⚠️ Failed to persist conversation state (simulate): {_e}")
 
-        # Prepare response with fallbacks
+        # Prepare response with fallbacks (prefer explicit response fields; otherwise last AI message)
         response_text = result.get("generated_response") or result.get("response_message") or ""
         if not response_text:
             try:
-                msgs = result.get("messages", []) or []
+                msgs = (
+                    result.get("messages", [])
+                    or result.get("state_updates", {}).get("messages", [])
+                    or state.get("messages", [])
+                )
                 # Find last AI-like message with content
                 for m in reversed(msgs):
                     content = getattr(m, "content", None)

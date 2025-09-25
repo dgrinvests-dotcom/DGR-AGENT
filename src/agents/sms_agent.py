@@ -216,6 +216,12 @@ class SMSAgent(BaseRealEstateAgent):
                 state["last_contact_method"] = "sms"
                 state["last_contact_time"] = datetime.now().isoformat()
                 # Preserve stage (don't forcibly overwrite booking/qualifying)
+                # Decide next agent routing
+                next_agent = "END"
+                bc_now = state.get("booking_context", {}) or {}
+                if state.get("next_action") == "schedule_appointment" or (bc_now.get("confirmed_time") and (bc_now.get("email") or state.get("lead_email"))):
+                    next_agent = "booking_agent"
+                    state["suppress_booking_message"] = True
                 
                 return {
                     "success": True,
@@ -223,7 +229,7 @@ class SMSAgent(BaseRealEstateAgent):
                     "message_id": send_result["message_id"],
                     "response_message": response_message,
                     "generated_response": response_message,
-                    "next_agent": "END",
+                    "next_agent": next_agent,
                     "booking_context": state.get("booking_context", {}),
                     "qualification_data": state.get("qualification_data", {}),
                     "state_updates": {
@@ -415,7 +421,7 @@ class SMSAgent(BaseRealEstateAgent):
             state["next_action"] = "schedule_appointment"
             print(f"📅 Booking confirm: time='{t}', email='{email}'")
             return f"Great! I’ll send a Google Meet invite for {t} to {email}. Reply STOP to opt out."
-        # If only time provided, ask for email
+        # If only time provided, confirm immediately if we already have an email; otherwise ask for email
         if time_12h or time_24h:
             t_time = time_12h.group(0) if time_12h else time_24h.group(0)
             # Remember pending time in context, include day/weekday prefix if present
@@ -424,6 +430,15 @@ class SMSAgent(BaseRealEstateAgent):
             booking_ctx["pending_time"] = t_label
             state["booking_context"] = booking_ctx
             print(f"📅 Booking pending time set: '{t_label}'")
+            known_email = booking_ctx.get("email") or state.get("lead_email")
+            if known_email:
+                booking_ctx.update({"confirmed_time": t_label, "email": known_email})
+                state["booking_context"] = booking_ctx
+                state["lead_email"] = known_email
+                state["conversation_stage"] = "scheduled"
+                state["next_action"] = "schedule_appointment"
+                print(f"📅 Booking confirm (time+known email): time='{t_label}', email='{known_email}'")
+                return f"Great! I’ll send a Google Meet invite for {t_label} to {known_email}. Reply STOP to opt out."
             return f"Perfect — {t_label} works. What email should I send the Google Meet invite to? Reply STOP to opt out."
         # If only day/part provided, ask for email
         if day_part or weekday:
@@ -432,8 +447,29 @@ class SMSAgent(BaseRealEstateAgent):
             state["booking_context"] = booking_ctx
             print(f"📅 Booking pending time set: '{t_label}'")
             return f"Got it! {t_label} works. What email should I send the Meet invite to? Reply STOP to opt out."
-        # If they replied 'yes', propose two choices
+        # If they replied 'yes', confirm using pending context if available; otherwise propose choices
         if msg in ["yes", "yeah", "yep", "sure", "ok", "okay"]:
+            t = booking_ctx.get("confirmed_time") or booking_ctx.get("pending_time")
+            email = booking_ctx.get("email") or state.get("lead_email")
+            if not email:
+                # Try to mine the last AI/Human messages for an email reference
+                import re as _re2
+                pattern = _re2.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+                msgs_rev = list(reversed(state.get("messages", []) or []))
+                for m in msgs_rev:
+                    c = (getattr(m, "content", "") or "")
+                    found = pattern.search(c)
+                    if found:
+                        email = found.group(0)
+                        break
+            if t and email:
+                booking_ctx.update({"confirmed_time": t, "email": email})
+                state["booking_context"] = booking_ctx
+                state["lead_email"] = email
+                state["conversation_stage"] = "scheduled"
+                state["next_action"] = "schedule_appointment"
+                print(f"📅 Booking confirm (yes): time='{t}', email='{email}'")
+                return f"Great! I’ll send a Google Meet invite for {t} to {email}. Reply STOP to opt out."
             return "Great! Would tomorrow morning or afternoon work better for a 10–15 min Meet? Reply STOP to opt out."
         # Default short ask without repeating
         # If we already have a pending time in context and they sent just an email without detection regex
