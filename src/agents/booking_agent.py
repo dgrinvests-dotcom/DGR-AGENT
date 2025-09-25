@@ -105,6 +105,74 @@ class BookingAgent(BaseRealEstateAgent):
             if "booking_agent" not in state["agent_history"]:
                 state["agent_history"].append("booking_agent")
             
+            # If SMS agent already confirmed time+email, auto-schedule now
+            bc = state.get("booking_context", {}) or {}
+            if bc.get("confirmed_time") and (bc.get("email") or state.get("lead_email")):
+                confirmed_str = bc.get("confirmed_time")
+                lead_email = (bc.get("email") or state.get("lead_email"))
+                # Try to parse to datetime using existing helper on the string
+                selected_time = self._parse_time_selection(confirmed_str) if hasattr(self, "_parse_time_selection") else None
+                if not selected_time:
+                    # Fallback: schedule for next business day at 2 PM
+                    from datetime import datetime, timedelta
+                    selected_time = (datetime.now() + timedelta(days=1)).replace(hour=14, minute=0, second=0, microsecond=0)
+                
+                event_result = self.create_google_meet_event(state, selected_time)
+                suppress = bool(state.get("suppress_booking_message"))
+                if event_result.get("success"):
+                    meet_link = event_result.get("meet_link")
+                    formatted_time = selected_time.strftime('%A, %B %d at %I:%M %p')
+                    state["booking_details"] = {
+                        "scheduled_time": selected_time.isoformat(),
+                        "meet_link": meet_link,
+                        "event_id": event_result.get("event_id"),
+                        "status": "scheduled"
+                    }
+                    state["conversation_stage"] = "scheduled"
+                    # Send a confirmation email as well (backup to Google invite emails)
+                    self._send_confirmation_email(state, lead_email, formatted_time, meet_link)
+                    if suppress:
+                        return {
+                            "next_agent": "supervisor",
+                            "action": "scheduled_no_sms",
+                            "state_updates": {
+                                "conversation_stage": "scheduled",
+                                "booking_details": state["booking_details"],
+                                "next_action": None
+                            }
+                        }
+                    else:
+                        message = f"All set! I’ve scheduled us for {formatted_time}. I’ve also emailed the Meet invite to {lead_email}." + (f" Link: {meet_link}" if meet_link else "")
+                        return {
+                            "next_agent": "communication_router",
+                            "action": "send_message",
+                            "message": message,
+                            "state_updates": {
+                                "conversation_stage": "scheduled",
+                                "booking_details": state["booking_details"],
+                                "next_action": "send_message"
+                            }
+                        }
+                else:
+                    # Could not create calendar event; still confirm via SMS and rely on manual follow-up
+                    formatted_time = selected_time.strftime('%A, %B %d at %I:%M %p')
+                    # Attempt to send a manual confirmation email if Gmail is available
+                    self._send_confirmation_email(state, lead_email, formatted_time, None)
+                    if suppress:
+                        return {
+                            "next_agent": "supervisor",
+                            "action": "scheduled_no_sms",
+                            "state_updates": {"next_action": None}
+                        }
+                    else:
+                        message = f"I’ve noted {formatted_time}. I’ll follow up with a calendar invite to {lead_email} shortly."
+                        return {
+                            "next_agent": "communication_router",
+                            "action": "send_message",
+                            "message": message,
+                            "state_updates": {"next_action": "send_message"}
+                        }
+            
             # Handle different booking scenarios
             if user_message:
                 return self._handle_booking_response(state, user_message)
@@ -114,6 +182,38 @@ class BookingAgent(BaseRealEstateAgent):
         except Exception as e:
             self.handle_error(state, e)
             return {"next_agent": "supervisor", "action": "error"}
+
+    def _send_confirmation_email(self, state: RealEstateAgentState, to_email: str, formatted_time: str, meet_link: Optional[str]):
+        """Send a confirmation email using the EmailAgent if configured."""
+        try:
+            if not to_email:
+                return
+            from agents.email_agent import EmailAgent
+            email_agent = EmailAgent()
+            if not getattr(email_agent, 'email_available', False):
+                return
+            subject = f"Confirmed: 15-minute Google Meet on {formatted_time}"
+            body_lines = [
+                f"Hi {state['lead_name']},",
+                "",
+                f"This confirms our 15-minute call on {formatted_time}.",
+                (f"Google Meet link: {meet_link}" if meet_link else "You'll receive a calendar invite with the Meet link shortly."),
+                "",
+                "If you need to reschedule, just reply to this email.",
+                "",
+                "Thanks,",
+                state.get('agent_name', 'Derek')
+            ]
+            body = "\n".join(body_lines)
+            email_agent._send_email(
+                to_email=to_email,
+                subject=subject,
+                message=body,
+                state=state,
+                threading_info=None
+            )
+        except Exception as e:
+            self.logger.error(f"Failed to send confirmation email: {e}")
     
     def _initiate_booking_process(self, state: RealEstateAgentState) -> Dict[str, Any]:
         """

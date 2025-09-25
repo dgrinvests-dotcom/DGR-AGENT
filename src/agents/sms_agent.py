@@ -165,6 +165,11 @@ class SMSAgent(BaseRealEstateAgent):
                 print("❌ Failed to generate response")
                 return {"success": False, "error": "Failed to generate response"}
             
+            # If scheduling has been triggered, mark a flag so booking_agent won't send another SMS
+            bc = state.get("booking_context", {}) or {}
+            if state.get("next_action") == "schedule_appointment" or (bc.get("confirmed_time") and (bc.get("email") or state.get("lead_email"))):
+                state["suppress_booking_message"] = True
+            
             # Send the response via SMS
             phone_number = state.get("lead_phone")
             if not phone_number:
@@ -263,19 +268,29 @@ class SMSAgent(BaseRealEstateAgent):
             else:
                 # All key details captured; advance to booking
                 state["conversation_stage"] = "booking"
+        elif current_stage == "booking":
+            # If we already have confirmed time and email, mark as scheduled
+            bc = state.get("booking_context", {}) or {}
+            if bc.get("confirmed_time") and (bc.get("email") or state.get("lead_email")):
+                state["conversation_stage"] = "scheduled"
     
     def _generate_conversation_response(self, state: RealEstateAgentState, incoming_message: str) -> str:
         """
-        Generate conversation response using LLM with system prompt for better conversational flow
+        Generate conversation response primarily with LLM, while still updating structured state.
         """
-        # Always extract qualification data first (rule-based + LLM-assisted)
+        # Update extracted qualification data (rule-based + optional LLM assist)
         self._extract_qualification_data(state, incoming_message)
         self._llm_enhance_qualification_data(state, incoming_message)
 
-        # Deterministic response selection to prevent repeats
-        # We still use LLM for extraction above, but response selection is handled
-        # by a smart template that asks only for the next missing field.
-        return self._generate_smart_template_response(state, incoming_message)
+        # If in booking stage, parse and update booking_context from message (time/email) but let LLM craft the text
+        if state.get("conversation_stage") == "booking":
+            try:
+                _ = self._generate_booking_followup(state, incoming_message)  # side-effects only
+            except Exception:
+                pass
+
+        # Use LLM to generate the reply (with strong anti-repetition rules). Fallbacks are handled internally.
+        return self._generate_llm_conversation_response(state, incoming_message)
     
     def _generate_smart_template_response(self, state: RealEstateAgentState, incoming_message: str) -> str:
         """Generate response using templates but with smart logic to avoid repeating questions"""
@@ -328,6 +343,26 @@ class SMSAgent(BaseRealEstateAgent):
         msg = text.lower().strip()
         booking_ctx = state.get("booking_context", {}) or {}
         import re as _re
+        
+        # If already confirmed, don't re-ask; gracefully acknowledge
+        if booking_ctx.get("confirmed_time") and (booking_ctx.get("email") or state.get("lead_email")):
+            state["conversation_stage"] = "scheduled"
+            if any(k in msg for k in ["thanks", "thank you", "ok", "okay", "great", "perfect", "sounds good"]):
+                return "All set! You’ll receive the Google Meet invite shortly. Reply STOP to opt out."
+            # If they send anything else after confirmation, keep it short
+            return "You’re all set — invite is on the way. Reply STOP to opt out."
+
+        # Guard: if prior AI message promised to send a Meet invite, treat acknowledgements as scheduled
+        if any(k in msg for k in ["thanks", "thank you", "ok", "okay", "great", "perfect", "sounds good"]):
+            messages = state.get("messages", []) or []
+            for m in reversed(messages):
+                if "AIMessage" in type(m).__name__:
+                    content = (getattr(m, "content", "") or "").lower()
+                    if "i’ll send a google meet invite" in content or "i'll send a google meet invite" in content:
+                        state["conversation_stage"] = "scheduled"
+                        print("📅 Booking ack: prior invite promise detected; acknowledging without re-asking")
+                        return "All set! You’ll receive the Google Meet invite shortly. Reply STOP to opt out."
+                    break
         # Email detection
         email_match = _re.search(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b", text)
         # Time detection (12h and 24h)
@@ -365,19 +400,27 @@ class SMSAgent(BaseRealEstateAgent):
             if booking_ctx.get("pending_time") and not (time_12h or time_24h or day_part or weekday):
                 t = booking_ctx.get("pending_time")
             else:
-                t_base = (time_12h.group(0) if time_12h else time_24h.group(0)) if (time_12h or time_24h) else (day_part or weekday or "")
-                t = t_base
+                if (time_12h or time_24h):
+                    t_time = time_12h.group(0) if time_12h else time_24h.group(0)
+                    prefix = day_part or weekday
+                    t = f"{prefix} {t_time}".strip() if prefix else t_time
+                else:
+                    t = (day_part or weekday or "")
             email = email_match.group(0)
             # Persist confirmed details
             booking_ctx.update({"email": email, "confirmed_time": t})
             state["booking_context"] = booking_ctx
+            state["lead_email"] = email
+            state["conversation_stage"] = "scheduled"
+            state["next_action"] = "schedule_appointment"
             print(f"📅 Booking confirm: time='{t}', email='{email}'")
             return f"Great! I’ll send a Google Meet invite for {t} to {email}. Reply STOP to opt out."
         # If only time provided, ask for email
         if time_12h or time_24h:
-            t = time_12h.group(0) if time_12h else time_24h.group(0)
-            # Remember pending time in context, including weekday prefix if present
-            t_label = f"{weekday} {t}".strip() if weekday else t
+            t_time = time_12h.group(0) if time_12h else time_24h.group(0)
+            # Remember pending time in context, include day/weekday prefix if present
+            prefix = day_part or weekday
+            t_label = f"{prefix} {t_time}".strip() if prefix else t_time
             booking_ctx["pending_time"] = t_label
             state["booking_context"] = booking_ctx
             print(f"📅 Booking pending time set: '{t_label}'")
@@ -399,6 +442,9 @@ class SMSAgent(BaseRealEstateAgent):
             email = email_match.group(0)
             booking_ctx.update({"email": email, "confirmed_time": t})
             state["booking_context"] = booking_ctx
+            state["lead_email"] = email
+            state["conversation_stage"] = "scheduled"
+            state["next_action"] = "schedule_appointment"
             print(f"📅 Booking confirm (ctx): time='{t}', email='{email}'")
             return f"Great! I’ll send a Google Meet invite for {t} to {email}. Reply STOP to opt out."
 
@@ -423,6 +469,9 @@ class SMSAgent(BaseRealEstateAgent):
                 email = email_match.group(0)
                 booking_ctx.update({"email": email, "confirmed_time": inferred})
                 state["booking_context"] = booking_ctx
+                state["lead_email"] = email
+                state["conversation_stage"] = "scheduled"
+                state["next_action"] = "schedule_appointment"
                 print(f"📅 Booking confirm (infer): time='{inferred}', email='{email}'")
                 return f"Great! I’ll send a Google Meet invite for {inferred} to {email}. Reply STOP to opt out."
 
@@ -455,9 +504,13 @@ class SMSAgent(BaseRealEstateAgent):
         print(f"🔍 Debug: Current qualification data: {qualification_data}")
         
         # Build system prompt with conversation context
+        booking_ctx = state.get("booking_context", {}) or {}
+        conv_stage = state.get("conversation_stage", "qualifying")
         system_prompt = f"""You are a professional real estate wholesaler having an SMS conversation with {lead_name} about their {prop_type.replace('_', ' ')} property.
 
+CURRENT STAGE: {conv_stage}
 CURRENT QUALIFICATION STATUS: {qualification_data}
+BOOKING CONTEXT: {booking_ctx}
 
 RECENT CONVERSATION HISTORY:
 {conversation_history}
@@ -468,25 +521,28 @@ QUALIFICATION REQUIREMENTS for {prop_type}:
 - long_term_rental: rental_status, condition, timeline, access, price_expectation
 
 CRITICAL RULES:
-1. NEVER ask about information already provided in the conversation history
-2. NEVER repeat questions you've already asked
-3. Look at the qualification status - if a field has a value, DON'T ask about it again
-4. Ask ONE new question at a time, keep responses under 160 characters
-5. Be conversational and natural, acknowledge their previous responses
-6. Always end with "Reply STOP to opt out"
-7. When ALL required fields are collected, offer to schedule a call
-8. If they've answered everything, move to booking
+1. NEVER ask for information already provided in the conversation history.
+2. NEVER repeat questions you've already asked.
+3. Ask ONE new question at a time; keep messages under 160 characters.
+4. Be conversational, friendly, and natural. Avoid robotic phrasing.
+5. Always end with "Reply STOP to opt out".
+6. When ALL required fields are collected, move to booking gracefully:
+   - If ONLY time is provided, politely ask for email.
+   - If ONLY email is provided and a time is pending/was proposed, confirm using that time.
+   - If time AND email are present (or time is pending and email arrives), reply with ONE friendly confirmation and do NOT ask for time again.
+   - After a "thanks/ok" following a confirmation, send a short acknowledgment (don't ask new scheduling questions).
+7. Do not send multiple back-to-back messages; compose a single response for this turn.
 
-RESPONSE PATTERNS:
-- "yes", "sure", "ok", "we can" = positive responses
-- "no", "can't", "unable" = negative responses
-- Numbers with $ or k = price expectations
-- Time references = timeline (this week, next month, asap, etc.)
-- Condition words = good/needs work
+TOOL USAGE FOR SCHEDULING (IMPORTANT):
+- If you have enough information to schedule (time + email, or email with a pending time), append a single line at the END of your message:
+- Exactly this format (JSON on one line):
+- TOOL_CALL: {"action":"schedule_appointment","time":"<time or day/time>","email":"<email>"}
+- Example: TOOL_CALL: {"action":"schedule_appointment","time":"tomorrow 2pm","email":"lead@example.com"}
+- Only include TOOL_CALL when you are certain about scheduling; otherwise, do not output TOOL_CALL.
 
 Their latest message: "{incoming_message}"
 
-Based on the conversation history and current qualification status, respond naturally without repeating previous questions."""
+Compose a single, natural SMS reply that follows these rules and reflects the current stage and booking context."""
 
         try:
             from langchain_core.messages import HumanMessage, SystemMessage
@@ -497,6 +553,35 @@ Based on the conversation history and current qualification status, respond natu
             
             response = self.llm.invoke(messages)
             generated_response = response.content if hasattr(response, 'content') else str(response)
+
+            # Detect optional TOOL_CALL to trigger scheduling via booking agent
+            import re as _re
+            import json as _json
+            try:
+                m = _re.search(r"TOOL_CALL:\s*(\{.*?\})\s*$", generated_response, flags=_re.DOTALL)
+                if m:
+                    tool_payload = _json.loads(m.group(1))
+                    action = (tool_payload.get("action") or "").lower()
+                    if action == "schedule_appointment":
+                        t = tool_payload.get("time")
+                        em = tool_payload.get("email")
+                        # Update booking context
+                        bc = state.get("booking_context", {}) or {}
+                        if t:
+                            bc["confirmed_time"] = t
+                        elif bc.get("pending_time"):
+                            bc["confirmed_time"] = bc["pending_time"]
+                        if em:
+                            bc["email"] = em
+                            state["lead_email"] = em
+                        state["booking_context"] = bc
+                        if bc.get("confirmed_time") and (bc.get("email") or state.get("lead_email")):
+                            state["conversation_stage"] = "scheduled"
+                            state["next_action"] = "schedule_appointment"
+                        # Strip tool call from user-visible message
+                        generated_response = generated_response[:m.start()].rstrip()
+            except Exception as _e:
+                print(f"⚠️ TOOL_CALL parse error: {_e}")
             
             # Also extract qualification data from the message
             self._extract_qualification_data(state, incoming_message)

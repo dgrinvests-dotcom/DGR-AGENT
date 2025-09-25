@@ -208,7 +208,7 @@ async def simulate_chat(req: SimulateChatRequest):
             conn.execute(
                 """
                 UPDATE leads
-                SET conversation_stage = ?, qualification_data = ?, status = 'responding', conversation_messages = ?, booking_context = ?
+                SET conversation_stage = ?, qualification_data = ?, status = 'responding', conversation_messages = ?, booking_context = ?, email = ?
                 WHERE phone = ?
                 """,
                 (
@@ -216,6 +216,7 @@ async def simulate_chat(req: SimulateChatRequest):
                     json.dumps(result.get("qualification_data", state.get("qualification_data", {}))),
                     json.dumps(serialized_msgs),
                     json.dumps(result.get("booking_context", state.get("booking_context", {}))),
+                    result.get("lead_email", state.get("lead_email", "")),
                     from_number,
                 ),
             )
