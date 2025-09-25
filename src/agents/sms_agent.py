@@ -223,6 +223,9 @@ class SMSAgent(BaseRealEstateAgent):
                     next_agent = "booking_agent"
                     state["suppress_booking_message"] = True
                 
+                # Save the generated message to the UI pass-through field
+                state["ui_message"] = response_message
+                
                 return {
                     "success": True,
                     "action": "conversation_response_sent",

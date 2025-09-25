@@ -183,8 +183,8 @@ class BookingAgent(BaseRealEstateAgent):
                     # Send a confirmation email as well (backup to Google invite emails)
                     self._send_confirmation_email(state, lead_email, formatted_time, meet_link)
                     if suppress:
-                        # Still provide a message for UI display, but don't send SMS
-                        ui_message = f"Perfect! I've scheduled our Google Meet for {formatted_time}. You'll receive the calendar invite at {lead_email}." + (f" Meet link: {meet_link}" if meet_link else "")
+                        # Pass through the UI message from the previous agent
+                        ui_message = state.get("ui_message") or f"Perfect! I've scheduled our Google Meet for {formatted_time}. You'll receive the calendar invite at {lead_email}."
                         return {
                             "next_agent": "supervisor",
                             "action": "scheduled_no_sms",
@@ -214,8 +214,8 @@ class BookingAgent(BaseRealEstateAgent):
                     # Attempt to send a manual confirmation email if Gmail is available
                     self._send_confirmation_email(state, lead_email, formatted_time, None)
                     if suppress:
-                        # Still provide a message for UI display, but don't send SMS
-                        ui_message = f"Got it! I've noted our Google Meet for {formatted_time}. I'll send you the calendar invite at {lead_email} shortly."
+                        # Pass through the UI message from the previous agent
+                        ui_message = state.get("ui_message") or f"Got it! I've noted our Google Meet for {formatted_time}. I'll send you the calendar invite at {lead_email} shortly."
                         return {
                             "next_agent": "supervisor",
                             "action": "scheduled_no_sms",

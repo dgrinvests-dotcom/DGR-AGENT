@@ -150,6 +150,9 @@ class RealEstateAgentState(MessagesState):
     # Custom Fields
     custom_data: Dict[str, Any]
 
+    # UI Pass-through
+    ui_message: Optional[str]
+
 
 def create_initial_state(
     lead_id: str,
@@ -260,7 +263,10 @@ def create_initial_state(
         retry_count=0,
         
         # Custom Fields
-        custom_data={}
+        custom_data={},
+        
+        # UI Pass-through
+        ui_message=None
     )
 
 
