@@ -132,18 +132,22 @@ class BookingAgent(BaseRealEstateAgent):
                             "next_agent": "communication_router",
                             "action": "send_message",
                             "message": msg,
+                            "response_message": msg,
+                            "generated_response": msg,
                             "state_updates": {
-                                "conversation_stage": "interested",
                                 "next_action": "send_message",
                                 "booking_details": {"status": "canceled"}
                             }
                         }
                     else:
+                        cancel_msg = "I couldn't cancel the calendar event automatically, but I've noted your request. I'll follow up shortly."
                         return {
                             "next_agent": "communication_router",
                             "action": "send_message",
-                            "message": "I couldn’t cancel the calendar event automatically, but I’ve noted your request. I’ll follow up shortly.",
-                            "state_updates": {"next_action": "send_message"}
+                            "message": cancel_msg,
+                            "response_message": cancel_msg,
+                            "generated_response": cancel_msg,
+                            "state_updates": {"next_action": "send_message", "booking_details": {"status": "canceled"}}
                         }
 
                 # Check availability before schedule/reschedule
@@ -155,6 +159,8 @@ class BookingAgent(BaseRealEstateAgent):
                         "next_agent": "communication_router",
                         "action": "send_message",
                         "message": alt_msg,
+                        "response_message": alt_msg,
+                        "generated_response": alt_msg,
                         "state_updates": {"next_action": "send_message"}
                     }
 
@@ -177,9 +183,13 @@ class BookingAgent(BaseRealEstateAgent):
                     # Send a confirmation email as well (backup to Google invite emails)
                     self._send_confirmation_email(state, lead_email, formatted_time, meet_link)
                     if suppress:
+                        # Still provide a message for UI display, but don't send SMS
+                        ui_message = f"Perfect! I've scheduled our Google Meet for {formatted_time}. You'll receive the calendar invite at {lead_email}." + (f" Meet link: {meet_link}" if meet_link else "")
                         return {
                             "next_agent": "supervisor",
                             "action": "scheduled_no_sms",
+                            "response_message": ui_message,
+                            "generated_response": ui_message,
                             "state_updates": {
                                 "conversation_stage": "scheduled",
                                 "booking_details": state["booking_details"],
@@ -204,9 +214,13 @@ class BookingAgent(BaseRealEstateAgent):
                     # Attempt to send a manual confirmation email if Gmail is available
                     self._send_confirmation_email(state, lead_email, formatted_time, None)
                     if suppress:
+                        # Still provide a message for UI display, but don't send SMS
+                        ui_message = f"Got it! I've noted our Google Meet for {formatted_time}. I'll send you the calendar invite at {lead_email} shortly."
                         return {
                             "next_agent": "supervisor",
                             "action": "scheduled_no_sms",
+                            "response_message": ui_message,
+                            "generated_response": ui_message,
                             "state_updates": {"next_action": None}
                         }
                     else:
