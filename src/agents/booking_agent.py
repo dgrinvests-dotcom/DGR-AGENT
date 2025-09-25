@@ -190,6 +190,9 @@ class BookingAgent(BaseRealEstateAgent):
                             "action": "scheduled_no_sms",
                             "response_message": ui_message,
                             "generated_response": ui_message,
+                            "conversation_stage": "scheduled",
+                            "qualification_data": state.get("qualification_data", {}),
+                            "booking_context": state.get("booking_context", {}),
                             "state_updates": {
                                 "conversation_stage": "scheduled",
                                 "booking_details": state["booking_details"],
@@ -221,6 +224,9 @@ class BookingAgent(BaseRealEstateAgent):
                             "action": "scheduled_no_sms",
                             "response_message": ui_message,
                             "generated_response": ui_message,
+                            "conversation_stage": state.get("conversation_stage"),
+                            "qualification_data": state.get("qualification_data", {}),
+                            "booking_context": state.get("booking_context", {}),
                             "state_updates": {"next_action": None}
                         }
                     else:
