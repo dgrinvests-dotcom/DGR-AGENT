@@ -105,8 +105,13 @@ class BookingAgent(BaseRealEstateAgent):
             if "booking_agent" not in state["agent_history"]:
                 state["agent_history"].append("booking_agent")
             
-            # If SMS agent already confirmed time+email, auto-schedule now
+            # If availability was explicitly requested, provide it now
+            if state.get("requested_availability"):
+                return self._provide_availability(state)
+
+            # If SMS agent already confirmed time+email, auto-schedule/reschedule/cancel now
             bc = state.get("booking_context", {}) or {}
+            booking_action = (state.get("booking_action") or "schedule") if bc.get("confirmed_time") else state.get("booking_action")
             if bc.get("confirmed_time") and (bc.get("email") or state.get("lead_email")):
                 confirmed_str = bc.get("confirmed_time")
                 lead_email = (bc.get("email") or state.get("lead_email"))
@@ -117,7 +122,47 @@ class BookingAgent(BaseRealEstateAgent):
                     from datetime import datetime, timedelta
                     selected_time = (datetime.now() + timedelta(days=1)).replace(hour=14, minute=0, second=0, microsecond=0)
                 
-                event_result = self.create_google_meet_event(state, selected_time)
+                # Handle cancel action
+                if booking_action == "cancel":
+                    cancel_result = self._cancel_calendar_event(state)
+                    if cancel_result.get("success"):
+                        state["conversation_stage"] = "interested"
+                        msg = "No problem — I’ve canceled the meeting. If you’d like to pick a new time, I can share some options."
+                        return {
+                            "next_agent": "communication_router",
+                            "action": "send_message",
+                            "message": msg,
+                            "state_updates": {
+                                "conversation_stage": "interested",
+                                "next_action": "send_message",
+                                "booking_details": {"status": "canceled"}
+                            }
+                        }
+                    else:
+                        return {
+                            "next_agent": "communication_router",
+                            "action": "send_message",
+                            "message": "I couldn’t cancel the calendar event automatically, but I’ve noted your request. I’ll follow up shortly.",
+                            "state_updates": {"next_action": "send_message"}
+                        }
+
+                # Check availability before schedule/reschedule
+                if not self._is_time_available(selected_time, self.default_meeting_duration):
+                    # Suggest human-friendly alternatives from calendar
+                    suggestions = self._get_available_time_slots()
+                    alt_msg = f"It looks like {selected_time.strftime('%A %I:%M %p')} is no longer available. Here are a few options:\n\n{suggestions}\n\nLet me know which works for you."
+                    return {
+                        "next_agent": "communication_router",
+                        "action": "send_message",
+                        "message": alt_msg,
+                        "state_updates": {"next_action": "send_message"}
+                    }
+
+                # Proceed with schedule or reschedule
+                if booking_action == "reschedule" and state.get("booking_details", {}).get("event_id"):
+                    event_result = self._reschedule_calendar_event(state, selected_time)
+                else:
+                    event_result = self.create_google_meet_event(state, selected_time)
                 suppress = bool(state.get("suppress_booking_message"))
                 if event_result.get("success"):
                     meet_link = event_result.get("meet_link")
@@ -125,7 +170,7 @@ class BookingAgent(BaseRealEstateAgent):
                     state["booking_details"] = {
                         "scheduled_time": selected_time.isoformat(),
                         "meet_link": meet_link,
-                        "event_id": event_result.get("event_id"),
+                        "event_id": event_result.get("event_id", state.get("booking_details", {}).get("event_id")),
                         "status": "scheduled"
                     }
                     state["conversation_stage"] = "scheduled"
@@ -474,6 +519,77 @@ Just let me know what works best!"""
             
         except Exception as e:
             self.logger.error(f"Failed to create Google Meet event: {e}")
+            return {"success": False, "error": str(e)}
+    
+    def _is_time_available(self, candidate_start: datetime, duration_minutes: int) -> bool:
+        """Check Google Calendar free/busy to confirm a slot is available before booking."""
+        try:
+            if not self.google_available:
+                return True
+            time_min = candidate_start.isoformat() + 'Z'
+            time_max = (candidate_start + timedelta(minutes=duration_minutes)).isoformat() + 'Z'
+            freebusy_query = {
+                'timeMin': time_min,
+                'timeMax': time_max,
+                'items': [{'id': self.google_calendar_id}]
+            }
+            result = self.calendar_service.freebusy().query(body=freebusy_query).execute()
+            busy = result['calendars'][self.google_calendar_id]['busy']
+            return len(busy) == 0
+        except Exception as e:
+            self.logger.error(f"Free/busy check failed: {e}")
+            # Be permissive if we cannot check
+            return True
+
+    def _reschedule_calendar_event(self, state: RealEstateAgentState, new_datetime: datetime) -> Dict[str, Any]:
+        """Reschedule an existing calendar event to a new time."""
+        try:
+            if not self.google_available:
+                return {"success": False, "error": "Google Calendar not available"}
+            event_id = state.get("booking_details", {}).get("event_id")
+            if not event_id:
+                return {"success": False, "error": "No event to reschedule"}
+            body = {
+                'start': {
+                    'dateTime': new_datetime.isoformat(),
+                    'timeZone': 'America/New_York',
+                },
+                'end': {
+                    'dateTime': (new_datetime + timedelta(minutes=self.default_meeting_duration)).isoformat(),
+                    'timeZone': 'America/New_York',
+                }
+            }
+            updated = self.calendar_service.events().patch(
+                calendarId=self.google_calendar_id,
+                eventId=event_id,
+                body=body
+            ).execute()
+            meet_link = None
+            if 'conferenceData' in updated and 'entryPoints' in updated['conferenceData']:
+                for ep in updated['conferenceData']['entryPoints']:
+                    if ep.get('entryPointType') == 'video':
+                        meet_link = ep.get('uri')
+                        break
+            return {"success": True, "event_id": updated.get('id', event_id), "meet_link": meet_link}
+        except Exception as e:
+            self.logger.error(f"Failed to reschedule event: {e}")
+            return {"success": False, "error": str(e)}
+
+    def _cancel_calendar_event(self, state: RealEstateAgentState) -> Dict[str, Any]:
+        """Cancel an existing calendar event if possible."""
+        try:
+            if not self.google_available:
+                return {"success": False, "error": "Google Calendar not available"}
+            event_id = state.get("booking_details", {}).get("event_id")
+            if not event_id:
+                return {"success": False, "error": "No event to cancel"}
+            self.calendar_service.events().delete(
+                calendarId=self.google_calendar_id,
+                eventId=event_id
+            ).execute()
+            return {"success": True}
+        except Exception as e:
+            self.logger.error(f"Failed to cancel event: {e}")
             return {"success": False, "error": str(e)}
     
     def get_calendar_availability(self, days_ahead: int = 3) -> List[Dict[str, Any]]:

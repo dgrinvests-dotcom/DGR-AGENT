@@ -203,8 +203,14 @@ def route_sms_result(state: RealEstateAgentState) -> str:
     """
     next_action = state.get("next_action")
     bc = state.get("booking_context", {}) or {}
-    # If booking was confirmed (time + email), go directly to booking agent
+    # If booking was confirmed (time + email), or a booking action was requested, go to booking agent
     if bc.get("confirmed_time") and (bc.get("email") or state.get("lead_email")):
+        return "booking_agent"
+    if state.get("requested_availability"):
+        return "booking_agent"
+    if state.get("booking_action") in ["reschedule", "cancel"]:
+        return "booking_agent"
+    if next_action == "schedule_appointment":
         return "booking_agent"
     if next_action == "fallback_to_email":
         return "email_agent"

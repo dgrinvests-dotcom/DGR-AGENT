@@ -502,6 +502,23 @@ class SMSAgent(BaseRealEstateAgent):
         
         print(f"🔍 Debug: Built conversation history:\n{conversation_history}")
         print(f"🔍 Debug: Current qualification data: {qualification_data}")
+
+        # Compute calendar availability to assist LLM suggestions when no time detected
+        availability_text = None
+        try:
+            if state.get("conversation_stage") == "booking":
+                _msg = (incoming_message or "").lower()
+                import re as _re
+                _m12 = _re.search(r"\b(1[0-2]|0?[1-9])(:[0-5][0-9])?\s*(am|pm)\b", _msg)
+                _m24 = _re.search(r"\b([01]?\d|2[0-3]):[0-5]\d\b", _msg)
+                if not (_m12 or _m24):
+                    try:
+                        from agents.booking_agent import BookingAgent as _BA
+                        availability_text = _BA()._get_available_time_slots()
+                    except Exception as _ae:
+                        print(f"⚠️ Availability fetch failed: {_ae}")
+        except Exception:
+            pass
         
         # Build system prompt with conversation context
         booking_ctx = state.get("booking_context", {}) or {}
@@ -511,6 +528,7 @@ class SMSAgent(BaseRealEstateAgent):
 CURRENT STAGE: {conv_stage}
 CURRENT QUALIFICATION STATUS: {qualification_data}
 BOOKING CONTEXT: {booking_ctx}
+{'CALENDAR AVAILABILITY:\n' + availability_text if availability_text else ''}
 
 RECENT CONVERSATION HISTORY:
 {conversation_history}
@@ -533,12 +551,17 @@ CRITICAL RULES:
    - After a "thanks/ok" following a confirmation, send a short acknowledgment (don't ask new scheduling questions).
 7. Do not send multiple back-to-back messages; compose a single response for this turn.
 
-TOOL USAGE FOR SCHEDULING (IMPORTANT):
+TOOL USAGE (IMPORTANT):
 - If you have enough information to schedule (time + email, or email with a pending time), append a single line at the END of your message:
 - Exactly this format (JSON on one line):
-- TOOL_CALL: {"action":"schedule_appointment","time":"<time or day/time>","email":"<email>"}
-- Example: TOOL_CALL: {"action":"schedule_appointment","time":"tomorrow 2pm","email":"lead@example.com"}
+- TOOL_CALL: {{"action":"schedule_appointment","time":"<time or day/time>","email":"<email>"}}
+- Example: TOOL_CALL: {{"action":"schedule_appointment","time":"tomorrow 2pm","email":"lead@example.com"}}
 - Only include TOOL_CALL when you are certain about scheduling; otherwise, do not output TOOL_CALL.
+
+Additional supported actions:
+- TOOL_CALL: {{"action":"reschedule_appointment","time":"<new time>"}}
+- TOOL_CALL: {{"action":"cancel_appointment"}}
+- TOOL_CALL: {{"action":"get_availability","days":3}}
 
 Their latest message: "{incoming_message}"
 
@@ -578,7 +601,25 @@ Compose a single, natural SMS reply that follows these rules and reflects the cu
                         if bc.get("confirmed_time") and (bc.get("email") or state.get("lead_email")):
                             state["conversation_stage"] = "scheduled"
                             state["next_action"] = "schedule_appointment"
+                            state["booking_action"] = "schedule"
                         # Strip tool call from user-visible message
+                        generated_response = generated_response[:m.start()].rstrip()
+                    elif action == "reschedule_appointment":
+                        t = tool_payload.get("time")
+                        bc = state.get("booking_context", {}) or {}
+                        if t:
+                            bc["confirmed_time"] = t
+                        state["booking_context"] = bc
+                        state["booking_action"] = "reschedule"
+                        state["next_action"] = "schedule_appointment"
+                        generated_response = generated_response[:m.start()].rstrip()
+                    elif action == "cancel_appointment":
+                        state["booking_action"] = "cancel"
+                        state["next_action"] = "schedule_appointment"
+                        generated_response = generated_response[:m.start()].rstrip()
+                    elif action == "get_availability":
+                        # Optionally store a hint to fetch availability next turn
+                        state["requested_availability"] = True
                         generated_response = generated_response[:m.start()].rstrip()
             except Exception as _e:
                 print(f"⚠️ TOOL_CALL parse error: {_e}")
